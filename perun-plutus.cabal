@@ -45,6 +45,7 @@ library
                  , plutus-ledger-api
                  , plutus-ledger-constraints
                  , plutus-tx-plugin
+                 , playground-common
                  , plutus-tx
                  , serialise
                  , text
@@ -52,7 +53,7 @@ library
     default-language: Haskell2010
 
 test-suite perun-plutus-test
-  import: shared
+  import:             shared
   type:               exitcode-stdio-1.0
   hs-source-dirs:     test
   main-is:            Spec.hs
@@ -60,7 +61,7 @@ test-suite perun-plutus-test
                       -rtsopts
                       -with-rtsopts=-N
                       -fno-warn-type-defaults
-  other-modules:
+  other-modules:      PerunPlutus.PerunDummy
   build-depends:      hspec
                     , hspec-expectations
                     , hspec-expectations-pretty-diff
