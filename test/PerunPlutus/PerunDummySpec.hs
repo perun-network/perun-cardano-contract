@@ -1,4 +1,4 @@
-module PerunPlutus.PerunDummy where
+module PerunPlutus.PerunDummySpec where
 
 import Test.Hspec
   ( Spec,

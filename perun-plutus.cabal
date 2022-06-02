@@ -61,7 +61,7 @@ test-suite perun-plutus-test
                       -rtsopts
                       -with-rtsopts=-N
                       -fno-warn-type-defaults
-  other-modules:      PerunPlutus.PerunDummy
+  other-modules:      PerunPlutus.PerunDummySpec
   build-depends:      hspec
                     , hspec-expectations
                     , hspec-expectations-pretty-diff
