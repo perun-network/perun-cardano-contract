@@ -4,6 +4,48 @@ Implementation for the Perun protocol in Plutus.
 
 # Development
 
+Developing contracts in Plutus can be done in one of two ways: **Native** or utilizing **Nix**.
+
+## Native
+
+Developing Plutus contracts using your native Haskell installation works just like developing any other basic Haskell project.
+
+Everything custom to Plutus is related to the sources WHERE `cabal` searches for dependencies.
+
+All these peculiarities are handled in the `cabal.project` file, which references, pins and exposes all dependencies needed.
+
+It can be a hassle to manually manage these dependencies, but you most likely won't have to deal with them and the issue persists even when using `Nix`.
+
+### Haskell Installation
+
+Do yourself a favor and [install `ghcup`](https://www.haskell.org/ghcup/).
+
+`ghcup` is an installer for the Haskell language and related tools.
+
+It also makes it VERY easy to switch between _active_ compiler, HLS and build-tool versions.
+
+Remember to add the `$PATH` for `ghcup` binaries.
+
+This project uses `GHC-8.10.7`, `cabal-3.6.2.0`, `HLS-1.7.0.0`.
+
+Using `ghcup tui` will bring up an interface where each appropriate version can be installed **AND** set.
+
+If you already have other `GHC` versions installed make sure you see ✔✔  and not just ✔.
+
+Otherwise the toolchain is only installed but not enabled.
+
+### Start developing
+
+Issue a `cabal build` in the project directory.
+
+It will take some time the first time around, because all dependencies have to be build and will be faster in subsequent runs, unless you/we update dependencies again.
+
+**NOTE**: If `cabal build` fails and `ghc` is complaining about some _missing files_ in _some_ package, check out `perun-plutus.cabal`, uncomment the `-dynamic` option for `ghc-opions` and try again
+
+If this works, please file a PR where this line stays uncommented.
+
+## Nix
+
 Developing contracts in Plutus requires having the [Plutus Haskell SDK](https://github.com/input-output-hk/plutus-apps) installed.
 
 Subpoints in the following contain some trivia and reasoning for why things have to be done this way.
@@ -42,7 +84,15 @@ One might now wonder what the development looks like. In summary: All commands w
 
 ## Getting HLS (Haskell-Language-Server) running
 
-Using HLS greatly improves effiency and gives a lot of code-style suggestions which lets a Haskell developer explore the language way better. Especially if they are new. Modern IDEs and Code-Editors allow to specify the exact binary which should be run as a language server for specific filetypes. So the following might have some pitfalls depending on the editor you are using but in essence all which has to be done is to let your editor use the command `haskell-language-server --lsp` which is available in the active `nix-shell` together with all paths for all required project dependencies.
+Using HLS greatly improves effiency and gives a lot of code-style suggestions which lets a Haskell developer explore the language way better.
+
+Especially if they are new.
+
+Modern IDEs and Code-Editors allow to specify the exact binary which should be run as a language server for specific filetypes.
+
+**NOTE**: If you use the `native` development option `HLS_COMMAND = haskell-language-server-wrapper`, for nix use `HLS_COMMAND = haskell-language-server`!
+
+So the following might have some pitfalls depending on the editor you are using but in essence all which has to be done is to let your editor use the command `${HLS_COMMAND} --lsp` which is available in the active `nix-shell` together with all paths for all required project dependencies.
 
 This should be achievable by just executing your editor within `nix-shell` and configuring the LSP command for Haskell files in its settings:
 
@@ -55,3 +105,31 @@ This should be achievable by just executing your editor within `nix-shell` and c
 ### Help HLS does not seem to be running
 
 The very first start of HLS will `cabal build` the project in the project. Despite all preparation of prebuilt binaries this can take quite some time. If you want to know when it SHOULD be ready just `cabal build` the project the very first time yourself or after you upgrade the SDK to know when it is done. Using HLS afterwards should just work.
+
+# Known Issues
+
+HLS is throwing an error related to Template-Haskell along the following lines:
+
+```
+src/PerunDummy.hs|1-2 col 1 error|
+Program error:
+GHC Core to PLC plugin:
+E043:Error:
+  Reference to a name which is not a local, a builtin, or an external INLINABLE function:
+  Variable Plutus.V1.Ledger.Contexts.scriptContextTxInfo [[RecSel]] No unfolding Context:
+  Compiling expr:
+  Plutus.V1.Ledger.Contexts.scriptContextTxInfo Context:
+  Compiling expr:
+  Plutus.V1.Ledger.Contexts.scriptContextTxInfo ctx Context:
+  Compiling expr:
+  let { info :: Plutus.V1.Ledger.Contexts.TxInfo [LclId, Unf=Unf{Src=<vanilla>, TopLvl=False, Value=False, ConLike=False, WorkFree=False, Expandable=True, Guidance=IF_ARGS [] 20 0}] info = Plutus.V1.Ledger.Contexts.scriptContextTxInfo ctx }
+    in let { ds_d2z2G :: (Plutus.V1.Ledger.Tx.TxOut, PerunDummy.ChannelDatum) [LclId, Unf=Unf{Src=<vanilla>, TopLvl=False, Value=False, ConLike=False, WorkFree=False, Expandable=False, Guidance=IF_ARGS [] 728 30}]
+             ds_d2z2G = join { fail_d2z2E [Occ=Once2!T[1]] :: GHC.Prim.Void# -> (Plutus.V1.Ledger.Tx.TxOut, PerunDummy.ChannelDatum) [LclId[JoinId(1)], Arity=1, Str
+  ...
+```
+
+HLS will still work for the rest of the file and this error is only an annoyance and can be considered a _false negative_.
+
+HLS seems to not respect the order of how all symbols and dependencies should be resolved.
+
+IF, however, this error occurs when using `cabal build` it probably is really because none of the conditions `Reference to a name which is not a local, a builtin, or an external INLINABLE function` is true (;
