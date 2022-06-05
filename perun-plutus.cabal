@@ -25,6 +25,14 @@ common shared
   default-language: Haskell2010
   build-depends:    base ^>=4.14.1.0
   ghc-options:      -Wall
+                    -- Safe to dis-/enable compiler flags. They mainly solve
+                    -- issues compiling onchain code because depending on the
+                    -- situation plutus-core might not compile due to GHC (Haskell
+                    -- compiler) trying to access definitions used on-chain BEFORE
+                    -- they are known to GHC.
+                    -fno-ignore-interface-pragmas
+                    -fno-omit-interface-pragmas
+                    -fobject-code
 
 library
     import: shared
@@ -35,7 +43,8 @@ library
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
-    build-depends: aeson
+    build-depends: plutus-tx-plugin
+                 , aeson
                  , bytestring
                  , cardano-api
                  , containers
@@ -44,7 +53,6 @@ library
                  , plutus-ledger
                  , plutus-ledger-api
                  , plutus-ledger-constraints
-                 , plutus-tx-plugin
                  , playground-common
                  , plutus-tx
                  , serialise
