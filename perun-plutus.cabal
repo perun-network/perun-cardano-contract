@@ -33,6 +33,11 @@ common shared
                     -fno-ignore-interface-pragmas
                     -fno-omit-interface-pragmas
                     -fobject-code
+                    -- Uncomment if there are build errors where `ghc`
+                    -- complains about "missing files in some package".
+                    -- If this helps, file a PR, thanks.
+                    --
+                    -- -dynamic
 
 library
     import: shared
