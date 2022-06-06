@@ -4,6 +4,19 @@ Implementation for the Perun protocol in Plutus.
 
 # Development
 
+## Plutus SDK Reference
+
+Hosted by cardano, it is almost a requirement to have the haddock docs open in
+the background as a reference. Especially when working with Haskell libraries:
+  * [Plutus SDK](https://playground.plutus.iohkdev.io/doc/haddock/)
+  * [Hackage Libraries | Everything that does not come from the Plutus SDK](https://hackage.haskell.org/)
+
+It can also be beneficial to access the up-to-date docs for your locally checked out SDK version via `nix`.
+For this follow the [Nix-Section](##Nix).
+Afterwards issue the command in the `plutus-apps` root directory: `$ nix-shell --run build-and-serve-docs`.
+
+## Setup
+
 Developing contracts in Plutus can be done in one of two ways: **Native** or utilizing **Nix**.
 
 ## Native
