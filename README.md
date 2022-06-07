@@ -57,6 +57,9 @@ It will take some time the first time around, because all dependencies have to b
 
 If this works, please file a PR where this line stays uncommented.
 
+As a last resort one can also try to enable `-dynamic` for every dependency by issuing `cabal build --ghc-options=-dynamic`.
+Most of the time this only has to be done once, s.t. `cabal` and `ghc` have the problem dependency build.
+
 ## Nix
 
 Developing contracts in Plutus requires having the [Plutus Haskell SDK](https://github.com/input-output-hk/plutus-apps) installed.
