@@ -220,7 +220,7 @@ mkChannelValidator oldDatum action ctx =
           traceIfFalse "channel parameters differ" (channelParameters oldDatum == channelParameters outputDatum)
           &&
           -- check that the time in the output datum is set properly
-          traceIfFalse "invalid time in output datum" outputTimeInValidRange
+          traceIfFalse "invalid time in output datum" (allowedValidRangeSize && outputTimeInValidRange)
           &&
           -- check that the channel is marked as disputed
           traceIfFalse "failed to mark channel as disputed" (disputed outputDatum)
