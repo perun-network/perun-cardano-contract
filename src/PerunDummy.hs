@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -19,44 +20,33 @@
 -- Remove this module header when in Playground
 --
 module PerunDummy
-  (
-      Channel (..)
-    , OpenParams (..)
-    , DisputeParams (..)
-    , CloseParams (..)
-    , ForceCloseParams(..)
-    , ChannelSchema
-    , open, dispute, close, forceClose
-    , endpoints
-    , schemas
-    , ensureKnownCurrencies
-    , printJson
-    , printSchemas
-    , registeredKnownCurrencies
-    , stage
+  ( Channel (..),
+    ChannelState (..),
+    OpenParams (..),
+    DisputeParams (..),
+    CloseParams (..),
+    ForceCloseParams (..),
+    ChannelSchema,
+    open,
+    dispute,
+    close,
+    forceClose,
+    contract,
+    schemas,
+    ensureKnownCurrencies,
+    printJson,
+    printSchemas,
+    registeredKnownCurrencies,
+    stage,
   )
 where
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 --
 -- end
 --
 import Control.Monad hiding (fmap)
 import Data.Aeson (FromJSON, ToJSON)
+import Data.Data
 import Data.Map as Map
 import Data.Text (Text, pack)
 import GHC.Generics (Generic)
@@ -68,6 +58,7 @@ import Playground.Contract (ensureKnownCurrencies, printJson, printSchemas, stag
 import Playground.TH (mkKnownCurrencies, mkSchemaDefinitions)
 import Playground.Types (KnownCurrency (..))
 import Plutus.Contract
+import Plutus.Contract.Oracle (verifySignedMessageOnChain)
 import qualified PlutusTx
 import PlutusTx.Prelude hiding (unless)
 import Schema (ToSchema)
@@ -80,6 +71,8 @@ import qualified Prelude as P
 --
 --
 
+type ChannelID = Integer
+
 --validMsDifference :: Integer
 --validMsDifference = 10000
 --
@@ -88,8 +81,7 @@ defaultValidMsRange = 10000 :: POSIXTime
 
 -- Parameters of the channel
 data Channel = Channel
-  { pChannelId :: !Integer,
-    pTimeLock :: !Integer,
+  { pTimeLock :: !Integer,
     pPartyA :: !PaymentPubKeyHash,
     pPartyB :: !PaymentPubKeyHash
   }
@@ -98,24 +90,23 @@ data Channel = Channel
 -- Equality of two Channels
 instance Eq Channel where
   {-# INLINEABLE (==) #-}
-  a == b =
-    (pChannelId a == pChannelId b)
-      && (pTimeLock a == pTimeLock b)
-      && (pPartyA a == pPartyA b)
-      && (pPartyB a == pPartyB b)
+  a == b = (pTimeLock   a == pTimeLock  b) &&
+           (pPartyA     a == pPartyA    b) &&
+           (pPartyB     a == pPartyB    b)
 
 PlutusTx.unstableMakeIsData ''Channel
 PlutusTx.makeLift ''Channel
 
-data State = State
-  { channelId :: !Integer,
+data ChannelState = ChannelState
+  { channelId :: !ChannelID,
     balanceA :: !Integer,
     balanceB :: !Integer,
     version :: !Integer
   }
-  deriving (P.Show)
+  deriving (Data)
+  deriving stock (P.Eq, P.Show)
 
-instance Eq State where
+instance Eq ChannelState where
   {-# INLINEABLE (==) #-}
   b == c =
     (channelId b == channelId c)
@@ -123,11 +114,11 @@ instance Eq State where
       && (balanceB b == balanceB c)
       && (version b == version c)
 
-PlutusTx.unstableMakeIsData ''State
-PlutusTx.makeLift ''State
+PlutusTx.unstableMakeIsData ''ChannelState
+PlutusTx.makeLift ''ChannelState
 
 data Dispute = Dispute
-  { newState :: !State
+  { newState :: !ChannelState
   }
   deriving (P.Show)
 
@@ -148,7 +139,7 @@ PlutusTx.makeLift ''ChannelAction
 -- Datum datatype
 data ChannelDatum = ChannelDatum
   { channelParameters :: !Channel,
-    state :: !State,
+    state :: !ChannelState,
     time :: !Ledger.POSIXTime,
     disputed :: !Bool
   }
@@ -166,18 +157,41 @@ instance Scripts.ValidatorTypes ChannelTypes where
   type DatumType ChannelTypes = ChannelDatum
 
 -- Params:
---      old state :: State
---      new state :: State
+--      old state :: ChannelState
+--      new state :: ChannelState
 -- Returns:
 --      True, iff the transition from the old state to the new state is valid,
 --      i.e. the channelId ist the same, the sum of the balances is the same
 --      and the version number strictly increases
 {-# INLINEABLE isValidStateTransition #-}
-isValidStateTransition :: State -> State -> Bool
+isValidStateTransition :: ChannelState -> ChannelState -> Bool
 isValidStateTransition old new =
   (channelId old == channelId new)
     && ((balanceA old + balanceB old) == (balanceA new + balanceB new))
     && (version old < version new)
+
+-- Onchain signature verification.
+verifyOnChain :: BuiltinByteString -> BuiltinByteString -> BuiltinByteString -> Bool
+verifyOnChain = verifySignature
+
+-- verifySignedMessageOnChain'
+--   :: FromData a =>
+--      ScriptContext
+--      -> PaymentPubKey
+--      -> SignedMessage a
+--      -> Either SignedMessageCheckError a
+-- verifySignedMessageOnChain' = verifySignedMessageOnChain
+--
+-- There is also:
+-- signMessage
+--    :: ToData a =>
+--        a
+--        -> PaymentPrivateKey
+--        -> Passphrase
+--        -> SignedMessage a
+--
+-- signMessage' == signMessage without `PassPhrase`. All that has to be done is
+-- to define a `ToData` and `FromData` instance for whatever has to be signed.
 
 -- Params:
 --  Datum
@@ -186,14 +200,17 @@ isValidStateTransition old new =
 -- Returns:
 --  Bool: Transaction is valid, iff this returns true and no errors are thrown
 {-# INLINEABLE mkChannelValidator #-}
-mkChannelValidator :: ChannelDatum -> ChannelAction -> ScriptContext -> Bool
-mkChannelValidator oldDatum action ctx =
+mkChannelValidator :: ChannelID -> ChannelDatum -> ChannelAction -> ScriptContext -> Bool
+mkChannelValidator cID oldDatum action ctx =
   traceIfFalse "wrong input value" correctInputValue
     && case action of
       -- Dispute Case:
       MkDispute Dispute {..} ->
         -- check that the state transition is valid
         traceIfFalse "invalid state transition" (isValidStateTransition oldState (state outputDatum))
+          &&
+          -- check that the channel id in the state in the dispute matches the actual channel id
+          traceIfFalse "state in dispute does not belong to this channel" ((channelId (state outputDatum)) == cID)
           &&
           -- check that the state in the dispute is reflected in the output datum
           traceIfFalse "output state does not match the state in the dispute" (newState == state outputDatum)
@@ -205,7 +222,7 @@ mkChannelValidator oldDatum action ctx =
           traceIfFalse "channel parameters differ" (channelParameters oldDatum == channelParameters outputDatum)
           &&
           -- check that the time in the output datum is set properly
-          traceIfFalse "invalid time in output datum" outputTimeInValidRange
+          traceIfFalse "invalid time in output datum" (allowedValidRangeSize && outputTimeInValidRange)
           &&
           -- check that the channel is marked as disputed
           traceIfFalse "failed to mark channel as disputed" (disputed outputDatum)
@@ -244,7 +261,7 @@ mkChannelValidator oldDatum action ctx =
     inVal :: Value
     inVal = txOutValue . txInInfoResolved $ input
 
-    oldState :: State
+    oldState :: ChannelState
     oldState = state oldDatum
 
     correctInputValue :: Bool
@@ -290,7 +307,7 @@ mkChannelValidator oldDatum action ctx =
     -- allowedValidRangeEnd = (width (intersection (from (time outputDatum)) (txInfoValidRange info))) <= validMsDifference
 
     allowedValidRangeSize :: Bool
-    allowedValidRangeSize = ((getPOSIXEndTime (strictUpperBound (txInfoValidRange info))) - (getPOSIXStartTime (strictLowerBound (txInfoValidRange info)))) <= defaultValidMsRange
+    allowedValidRangeSize = (getPOSIXEndTime (strictUpperBound (txInfoValidRange info)) - getPOSIXStartTime (strictLowerBound (txInfoValidRange info))) <= defaultValidMsRange
 
     -- Check that the time in the output datum of the consuming transaction is located inside the valid range of the consuming transaction
     outputTimeInValidRange :: Bool
@@ -298,7 +315,7 @@ mkChannelValidator oldDatum action ctx =
 
     -- Check that the relative time-lock has passed
     correctForceCloseSlotRange :: Bool
-    correctForceCloseSlotRange = (from ((time oldDatum) + (fromMilliSeconds (DiffMilliSeconds (pTimeLock (channelParameters oldDatum)))))) `contains` txInfoValidRange info
+    correctForceCloseSlotRange = from (time oldDatum + fromMilliSeconds (DiffMilliSeconds (pTimeLock (channelParameters oldDatum)))) `contains` txInfoValidRange info
 
     -- Returns true if party h is payed value v in an output of the transaction
     getsValue :: PaymentPubKeyHash -> Value -> Bool
@@ -316,22 +333,22 @@ mkChannelValidator oldDatum action ctx =
 --
 --
 
-typedChannelValidator :: Scripts.TypedValidator ChannelTypes
-typedChannelValidator =
+typedChannelValidator :: ChannelID -> Scripts.TypedValidator ChannelTypes
+typedChannelValidator cID =
   Scripts.mkTypedValidator @ChannelTypes
-    $$(PlutusTx.compile [||mkChannelValidator||])
+    ($$(PlutusTx.compile [||mkChannelValidator||]) `PlutusTx.applyCode` (PlutusTx.liftCode cID))
     $$(PlutusTx.compile [||wrap||])
   where
     wrap = Scripts.wrapValidator @ChannelDatum @ChannelAction
 
-channelValidator :: Validator
-channelValidator = Scripts.validatorScript typedChannelValidator
+channelValidator :: ChannelID -> Validator
+channelValidator = Scripts.validatorScript . typedChannelValidator
 
-channelHash :: Ledger.ValidatorHash
-channelHash = Scripts.validatorHash typedChannelValidator
+channelHash :: ChannelID -> Ledger.ValidatorHash
+channelHash = Scripts.validatorHash . typedChannelValidator
 
-channelAddress :: Ledger.Address
-channelAddress = scriptHashAddress channelHash
+channelAddress :: ChannelID -> Ledger.Address
+channelAddress = scriptHashAddress . channelHash
 
 --
 --
@@ -344,34 +361,41 @@ channelAddress = scriptHashAddress channelHash
 --
 
 data OpenParams = OpenParams
-  { spChannelId :: !Integer,
-    spPartyA :: !PaymentPubKeyHash,
-    spPartyB :: !PaymentPubKeyHash,
+  { spChannelId :: !ChannelID,
+    -- Using `BuiltinByteString` here because `PaymentPubKeyHash` has no
+    -- `Data.Data` instance defined. There are better solutions but this works
+    -- as an initial solution.
+    spPartyA :: !BuiltinByteString,
+    spPartyB :: !BuiltinByteString,
     spBalanceA :: !Integer,
     spBalanceB :: !Integer,
     spTimeLock :: !Integer
   }
-  deriving (Generic, ToJSON, FromJSON, ToSchema)
+  deriving (Generic, ToJSON, FromJSON, ToSchema, Data)
+  deriving stock (P.Eq, P.Show)
 
 data DisputeParams = DisputeParams
-  { dpChannelId :: !Integer,
+  { dpChannelId :: !ChannelID,
     dpBalanceA :: !Integer,
     dpBalanceB :: !Integer,
     dpVersion :: !Integer
   }
-  deriving (Generic, ToJSON, FromJSON, ToSchema)
+  deriving (Generic, ToJSON, FromJSON, ToSchema, Data)
+  deriving stock (P.Eq, P.Show)
 
 data CloseParams = CloseParams
-  { cpChannelId :: !Integer,
+  { cpChannelId :: !ChannelID,
     cpBalanceA :: !Integer,
     cpBalanceB :: !Integer
   }
-  deriving (Generic, ToJSON, FromJSON, ToSchema)
+  deriving (Generic, ToJSON, FromJSON, ToSchema, Data)
+  deriving stock (P.Eq, P.Show)
 
 data ForceCloseParams = ForceCloseParams
-  { fpChannelId :: !Integer
+  { fpChannelId :: !ChannelID
   }
-  deriving (Generic, ToJSON, FromJSON, ToSchema)
+  deriving (Generic, ToJSON, FromJSON, ToSchema, Data)
+  deriving stock (P.Eq, P.Show)
 
 type ChannelSchema =
   Endpoint "open" OpenParams
@@ -389,13 +413,12 @@ open OpenParams {..} = do
   t <- currentTime
   let c =
         Channel
-          { pChannelId = spChannelId,
-            pTimeLock = spTimeLock,
-            pPartyA = spPartyA,
-            pPartyB = spPartyB
+          { pTimeLock = spTimeLock,
+            pPartyA = PaymentPubKeyHash . PubKeyHash $ spPartyA,
+            pPartyB = PaymentPubKeyHash . PubKeyHash $ spPartyB
           }
       s =
-        State
+        ChannelState
           { channelId = spChannelId,
             balanceA = spBalanceA,
             balanceB = spBalanceB,
@@ -410,9 +433,9 @@ open OpenParams {..} = do
           }
       v = Ada.lovelaceValueOf (spBalanceA + spBalanceB)
       tx = Constraints.mustPayToTheScript d v
-  ledgerTx <- submitTxConstraints typedChannelValidator tx
+  ledgerTx <- submitTxConstraints (typedChannelValidator spChannelId) tx
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
-  logInfo @P.String $ printf "Opened channel %s with value %s" (P.show c) (P.show v)
+  logInfo @P.String $ printf "Opened channel %d with parameters %s and value %s" spChannelId (P.show c) (P.show v)
 
 --
 -- dispute logic
@@ -423,14 +446,10 @@ dispute DisputeParams {..} = do
   t <- currentTime
   (oref, o, d@ChannelDatum {..}) <- findChannel dpChannelId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
-  --
-  -- function minBid used here in off-chain code, but defined in on-chain code
-  -- (Example of code reuse)
-  --
-  when (dpVersion <= (version state)) $
+  when (dpVersion <= version state) $
     throwError $ pack $ printf "version no greater than current version number"
   let s =
-        State
+        ChannelState
           { channelId = dpChannelId,
             balanceA = dpBalanceA,
             balanceB = dpBalanceB,
@@ -443,12 +462,12 @@ dispute DisputeParams {..} = do
             time = t,
             disputed = True
           }
-      v = Ada.lovelaceValueOf ((balanceA state) + (balanceB state))
+      v = Ada.lovelaceValueOf (balanceA state + balanceB state)
       r = Redeemer $ PlutusTx.toBuiltinData $ MkDispute disp
 
       lookups =
-        Constraints.typedValidatorLookups typedChannelValidator
-          P.<> Constraints.otherScript channelValidator
+        Constraints.typedValidatorLookups (typedChannelValidator dpChannelId)
+          P.<> Constraints.otherScript (channelValidator dpChannelId)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
         Constraints.mustPayToTheScript newDatum v
@@ -468,8 +487,8 @@ close CloseParams {..} = do
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   let r = Redeemer $ PlutusTx.toBuiltinData Close
       lookups =
-        Constraints.typedValidatorLookups typedChannelValidator
-          P.<> Constraints.otherScript channelValidator
+        Constraints.typedValidatorLookups (typedChannelValidator cpChannelId)
+          P.<> Constraints.otherScript (channelValidator cpChannelId)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
         Constraints.mustPayToPubKey (pPartyA channelParameters) (Ada.lovelaceValueOf cpBalanceA)
@@ -479,7 +498,8 @@ close CloseParams {..} = do
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $
     printf
-      "closed channel %s with final balance (%d, %d)"
+      "closed channel %d with params %s. The final balance is: (%d, %d)"
+      cpChannelId
       (P.show channelParameters)
       cpBalanceA
       cpBalanceB
@@ -492,32 +512,33 @@ forceClose :: forall w s. ForceCloseParams -> Contract w s Text ()
 forceClose ForceCloseParams {..} = do
   (oref, o, d@ChannelDatum {..}) <- findChannel fpChannelId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
-  when (not disputed) $
+  unless disputed $
     throwError $ pack $ printf "channel was never in disputed state"
   let r = Redeemer $ PlutusTx.toBuiltinData ForceClose
       lookups =
-        Constraints.typedValidatorLookups typedChannelValidator
-          P.<> Constraints.otherScript channelValidator
+        Constraints.typedValidatorLookups (typedChannelValidator fpChannelId)
+          P.<> Constraints.otherScript (channelValidator fpChannelId)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
         Constraints.mustPayToPubKey (pPartyA channelParameters) (Ada.lovelaceValueOf (balanceA state))
           <> Constraints.mustPayToPubKey (pPartyB channelParameters) (Ada.lovelaceValueOf (balanceB state))
-          <> Constraints.mustValidateIn (from (time + 1 + (fromMilliSeconds (DiffMilliSeconds (pTimeLock channelParameters)))))
+          <> Constraints.mustValidateIn (from (time + 1 + fromMilliSeconds (DiffMilliSeconds (pTimeLock channelParameters))))
           <> Constraints.mustSpendScriptOutput oref r
   ledgerTx <- submitTxConstraintsWith lookups tx
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $
     printf
-      "force closed channel %s with final balance (%d, %d)"
+      "force closed channel %d with parameters %s. The final balance is: (%d, %d)"
+      fpChannelId
       (P.show channelParameters)
       (balanceA state)
       (balanceB state)
 
 findChannel ::
-  Integer ->
+  ChannelID ->
   Contract w s Text (TxOutRef, ChainIndexTxOut, ChannelDatum)
-findChannel cId = do
-  utxos <- utxosAt $ scriptHashAddress channelHash
+findChannel cID = do
+  utxos <- utxosAt $ scriptHashAddress (channelHash cID)
   let xs =
         [ (oref, o)
           | (oref, o) <- Map.toList utxos
@@ -527,17 +548,14 @@ findChannel cId = do
       Left _ -> throwError "datum missing"
       Right (Datum e) -> case PlutusTx.fromBuiltinData e of
         Nothing -> throwError "datum has wrong type"
-        Just d@ChannelDatum {..}
-          | pChannelId channelParameters == cId -> return (oref, o, d)
-          | otherwise -> throwError "channel id missmatch"
+        Just d@ChannelDatum {} -> return (oref, o, d)
     _ -> throwError "channel utxo not found"
 
 --
--- Actual Endpoints for start, bid and close
+-- Top-level contract, exposing all endpoints.
 --
-
-endpoints :: Contract () ChannelSchema Text ()
-endpoints = awaitPromise (open' `select` dispute' `select` close' `select` forceClose') >> endpoints
+contract :: Contract () ChannelSchema Text ()
+contract = selectList [open', dispute', close', forceClose'] >> contract
   where
     open' = endpoint @"open" open
     dispute' = endpoint @"dispute" dispute

@@ -4,6 +4,19 @@ Implementation for the Perun protocol in Plutus.
 
 # Development
 
+## Plutus SDK Reference
+
+Hosted by cardano, it is almost a requirement to have the haddock docs open in
+the background as a reference. Especially when working with Haskell libraries:
+  * [Plutus SDK](https://playground.plutus.iohkdev.io/doc/haddock/)
+  * [Hackage Libraries | Everything that does not come from the Plutus SDK](https://hackage.haskell.org/)
+
+It can also be beneficial to access the up-to-date docs for your locally checked out SDK version via `nix`.
+For this follow the [Nix-Section](##Nix).
+Afterwards issue the command in the `plutus-apps` root directory: `$ nix-shell --run build-and-serve-docs`.
+
+## Setup
+
 Developing contracts in Plutus can be done in one of two ways: **Native** or utilizing **Nix**.
 
 ## Native
@@ -43,6 +56,9 @@ It will take some time the first time around, because all dependencies have to b
 **NOTE**: If `cabal build` fails and `ghc` is complaining about some _missing files_ in _some_ package, check out `perun-plutus.cabal`, uncomment the `-dynamic` option for `ghc-opions` and try again
 
 If this works, please file a PR where this line stays uncommented.
+
+As a last resort one can also try to enable `-dynamic` for every dependency by issuing `cabal build --ghc-options=-dynamic`.
+Most of the time this only has to be done once, s.t. `cabal` and `ghc` have the problem dependency build.
 
 ## Nix
 

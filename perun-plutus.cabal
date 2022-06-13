@@ -48,22 +48,22 @@ library
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
-    build-depends: plutus-tx-plugin
-                 , aeson
-                 , bytestring
-                 , cardano-api
-                 , containers
-                 , data-default
-                 , plutus-contract
-                 , plutus-ledger
-                 , plutus-ledger-api
-                 , plutus-ledger-constraints
-                 , playground-common
-                 , plutus-tx
-                 , serialise
-                 , text
+    build-depends:      plutus-tx-plugin
+                      , aeson
+                      , bytestring
+                      , cardano-api
+                      , containers
+                      , data-default
+                      , plutus-contract
+                      , plutus-ledger
+                      , plutus-ledger-api
+                      , plutus-ledger-constraints
+                      , playground-common
+                      , plutus-tx
+                      , lens
+                      , serialise
+                      , text
     hs-source-dirs:   src
-    default-language: Haskell2010
 
 test-suite perun-plutus-test
   import:             shared
@@ -77,5 +77,17 @@ test-suite perun-plutus-test
   other-modules:      PerunPlutus.PerunDummySpec
   build-depends:      hspec
                     , hspec-expectations
+                    , QuickCheck -any
+                    , tasty -any
+                    , tasty-hunit -any
+                    , tasty-golden -any
+                    , tasty-quickcheck -any
                     , hspec-expectations-pretty-diff
+                    , perun-plutus
+                    , plutus-contract
+                    , plutus-ledger
+                    , plutus-ledger-api
+                    , plutus-tx
+                    , lens
+                    , text
   build-tool-depends: hspec-discover:hspec-discover == 2.*
