@@ -1,0 +1,14 @@
+-- From `cardano-crypto-praos`:
+--  flag external-libsodium-vrf
+--      description: Rely on a special libsodium fork containing the VRF code.
+--                   Otherwise expect a normal unaltered system libsodium, and
+--                   bundle the VRF code.
+--      default: True
+--      manual: True
+--
+-- So all this does is to expect an unaltered libsodium library which gets
+-- bundled with the custom/extra VRF code.
+--
+-- ONLY necessary in for the `test-suite`, for some reason...
+package cardano-crypto-praos
+  flags: -external-libsodium-vrf

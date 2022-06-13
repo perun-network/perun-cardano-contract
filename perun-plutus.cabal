@@ -25,6 +25,19 @@ common shared
   default-language: Haskell2010
   build-depends:    base ^>=4.14.1.0
   ghc-options:      -Wall
+                    -- Safe to dis-/enable compiler flags. They mainly solve
+                    -- issues compiling onchain code because depending on the
+                    -- situation plutus-core might not compile due to GHC (Haskell
+                    -- compiler) trying to access definitions used on-chain BEFORE
+                    -- they are known to GHC.
+                    -fno-ignore-interface-pragmas
+                    -fno-omit-interface-pragmas
+                    -fobject-code
+                    -- Uncomment if there are build errors where `ghc`
+                    -- complains about "missing files in some package".
+                    -- If this helps, file a PR, thanks.
+                    --
+                    -- -dynamic
 
 library
     import: shared
@@ -35,24 +48,25 @@ library
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
-    build-depends: aeson
-                 , bytestring
-                 , cardano-api
-                 , containers
-                 , data-default
-                 , plutus-contract
-                 , plutus-ledger
-                 , plutus-ledger-api
-                 , plutus-ledger-constraints
-                 , plutus-tx-plugin
-                 , plutus-tx
-                 , serialise
-                 , text
+    build-depends:      plutus-tx-plugin
+                      , aeson
+                      , bytestring
+                      , cardano-api
+                      , containers
+                      , data-default
+                      , plutus-contract
+                      , plutus-ledger
+                      , plutus-ledger-api
+                      , plutus-ledger-constraints
+                      , playground-common
+                      , plutus-tx
+                      , lens
+                      , serialise
+                      , text
     hs-source-dirs:   src
-    default-language: Haskell2010
 
 test-suite perun-plutus-test
-  import: shared
+  import:             shared
   type:               exitcode-stdio-1.0
   hs-source-dirs:     test
   main-is:            Spec.hs
@@ -60,8 +74,20 @@ test-suite perun-plutus-test
                       -rtsopts
                       -with-rtsopts=-N
                       -fno-warn-type-defaults
-  other-modules:
+  other-modules:      PerunPlutus.PerunDummySpec
   build-depends:      hspec
                     , hspec-expectations
+                    , QuickCheck -any
+                    , tasty -any
+                    , tasty-hunit -any
+                    , tasty-golden -any
+                    , tasty-quickcheck -any
                     , hspec-expectations-pretty-diff
+                    , perun-plutus
+                    , plutus-contract
+                    , plutus-ledger
+                    , plutus-ledger-api
+                    , plutus-tx
+                    , lens
+                    , text
   build-tool-depends: hspec-discover:hspec-discover == 2.*
