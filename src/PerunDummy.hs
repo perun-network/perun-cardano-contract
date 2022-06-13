@@ -56,13 +56,13 @@ import Playground.Contract (ensureKnownCurrencies, printJson, printSchemas, stag
 import Playground.TH (mkKnownCurrencies, mkSchemaDefinitions)
 import Playground.Types (KnownCurrency (..))
 import Plutus.Contract
-import Plutus.Contract.Oracle (verifySignedMessageOnChain, SignedMessage(..), SignedMessageCheckError(..), signMessage')
+import Plutus.Contract.Oracle (SignedMessage (..), SignedMessageCheckError (..), signMessage', verifySignedMessageOnChain)
+import Plutus.V1.Ledger.Api (Credential (PubKeyCredential), LedgerBytes (LedgerBytes), StakingCredential (StakingHash), fromBytes)
 import qualified PlutusTx
 import PlutusTx.Prelude hiding (unless)
 import Schema (ToSchema)
 import Text.Printf (printf)
 import qualified Prelude as P
-import Plutus.V1.Ledger.Api (fromBytes, Credential (PubKeyCredential), StakingCredential (StakingHash), LedgerBytes (LedgerBytes))
 
 --
 --
@@ -91,11 +91,12 @@ data Channel = Channel
 -- Equality of two Channels
 instance Eq Channel where
   {-# INLINEABLE (==) #-}
-  a == b = (pTimeLock   a == pTimeLock  b) &&
-           (pSigningPKA     a == pSigningPKA    b) &&
-           (pSigningPKB     a == pSigningPKB    b) &&
-           (pPaymentPKA     a == pPaymentPKA    b) &&
-           (pPaymentPKB     a == pPaymentPKB    b)
+  a == b =
+    (pTimeLock a == pTimeLock b)
+      && (pSigningPKA a == pSigningPKA b)
+      && (pSigningPKB a == pSigningPKB b)
+      && (pPaymentPKA a == pPaymentPKA b)
+      && (pPaymentPKB a == pPaymentPKB b)
 
 PlutusTx.unstableMakeIsData ''Channel
 PlutusTx.makeLift ''Channel
@@ -116,12 +117,11 @@ instance Eq ChannelState where
     (channelId b == channelId c)
       && (balanceA b == balanceA c)
       && (balanceB b == balanceB c)
-      && (version b  == version c)
-      && (final b    == final c)
+      && (version b == version c)
+      && (final b == final c)
 
 PlutusTx.unstableMakeIsData ''ChannelState
 PlutusTx.makeLift ''ChannelState
-
 
 data SignedState = SignedState
   { newState :: !ChannelState,
@@ -132,14 +132,13 @@ data SignedState = SignedState
 
 instance Eq SignedState where
   {-# INLINEABLE (==) #-}
-  b == c = (newState b == newState c) &&
-           (sigA b     == sigA     c) &&
-           (sigB b     == sigB     c)
+  b == c =
+    (newState b == newState c)
+      && (sigA b == sigA c)
+      && (sigB b == sigB c)
 
 PlutusTx.unstableMakeIsData ''SignedState
 PlutusTx.makeLift ''SignedState
-
-
 
 -- Redeemer Datatype
 data ChannelAction = MkDispute SignedState | MkClose SignedState | ForceClose
@@ -244,9 +243,9 @@ mkChannelValidator cID oldDatum action ctx =
           -- check that B's signature on the new state is valid
           traceIfFalse "B's signed state does not match the state in the dispute" (getStateFromValidSignature (pSigningPKB (channelParameters oldDatum)) sigB == newState)
       -- Close Case
-      MkClose SignedState {..}->
-          -- 
-          traceIfFalse "Closing state does not belong to this channel" (cID == channelId newState)
+      MkClose SignedState {..} ->
+        --
+        traceIfFalse "Closing state does not belong to this channel" (cID == channelId newState)
           &&
           -- check that A's supplied key is correct
           --traceIfFalse "A's supplied keys do not match their key in the channel parameters" (verifyKeysMatch keyA (pPartyA (channelParameters oldDatum)))
@@ -265,7 +264,7 @@ mkChannelValidator cID oldDatum action ctx =
           &&
           -- check that A receives their balance
           traceIfFalse "Party A did not get their balance" (getsValue (pPaymentPKA (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceA newState))
-           &&
+          &&
           -- check that B receives their balance
           traceIfFalse "Party B did not get their balance" (getsValue (pPaymentPKB (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceB newState))
       -- ForceClose Case
@@ -339,11 +338,14 @@ mkChannelValidator cID oldDatum action ctx =
     getPOSIXTimeFromUpperBound _ = traceError "unable to verify time"
 
     getStateFromValidSignature :: PaymentPubKey -> SignedMessage ChannelState -> ChannelState
-    getStateFromValidSignature key sm = let
-                                       x = verifySignedMessageOnChain ctx key sm
-                                     in case x of
-                                       Left _ -> traceError "Signature on signed state is invalid"
-                                       Right state -> state
+    getStateFromValidSignature key sm =
+      let x = verifySignedMessageOnChain ctx key sm
+       in case x of
+            Left SignatureMismatch {} -> traceError "Signedstate error: SignatureMismatch on signed state"
+            Left DatumMissing {} -> traceError "Signedstate error: Missing datum in tx"
+            Left DecodingError -> traceError "Signedstate error: Malformed Datum"
+            Left DatumNotEqualToExpected -> traceError "SignedState error: Datum not according to hash"
+            Right state -> state
 
     --verifyKeysMatch :: PaymentPubKey -> PaymentPubKeyHash -> Bool
     --verifyKeysMatch pk pkh = paymentPubKeyHash pk == pkh
@@ -367,10 +369,9 @@ mkChannelValidator cID oldDatum action ctx =
               | o' <- txInfoOutputs info,
                 txOutValue o' == v
             ]
-            -- inlined code from Ledger.Address pubKeyAddress :: PaymentPubKey -> Maybe StakePubKeyHash-> Address
-            -- then switched (pubKeyHash key) to dummy -> then it compiles why tho?!?!?
-       in txOutAddress o == pubKeyHashAddress pkh Nothing
-
+       in -- inlined code from Ledger.Address pubKeyAddress :: PaymentPubKey -> Maybe StakePubKeyHash-> Address
+          -- then switched (pubKeyHash key) to dummy -> then it compiles why tho?!?!?
+          txOutAddress o == pubKeyHashAddress pkh Nothing
 
 --
 --
@@ -407,9 +408,6 @@ channelAddress = scriptHashAddress . channelHash
 
 data OpenParams = OpenParams
   { spChannelId :: !ChannelID,
-    -- Using `BuiltinByteString` here because `PaymentPubKeyHash` has no
-    -- `Data.Data` instance defined. There are better solutions but this works
-    -- as an initial solution.
     spSigningPKA :: !PaymentPubKey,
     spSigningPKB :: !PaymentPubKey,
     spPaymentPKA :: !PaymentPubKeyHash,
@@ -446,7 +444,8 @@ data CloseParams = CloseParams
   deriving stock (P.Eq, P.Show)
 
 newtype ForceCloseParams = ForceCloseParams ChannelID
-  deriving (Generic, ToJSON, FromJSON)
+  deriving newtype (ToJSON, FromJSON)
+  deriving (Generic)
   deriving stock (P.Eq, P.Show)
 
 type ChannelSchema =
@@ -511,7 +510,8 @@ dispute DisputeParams {..} = do
             version = dpVersion,
             final = dpFinal
           }
-      disp = SignedState
+      disp =
+        SignedState
           { newState = s,
             sigA = dpSigA,
             sigB = dpSigB
@@ -555,12 +555,13 @@ close CloseParams {..} = do
             version = cpVersion,
             final = cpFinal
           }
-      cls = SignedState
+      cls =
+        SignedState
           { newState = s,
             sigA = cpSigA,
             sigB = cpSigB
           }
-      r = Redeemer $ PlutusTx.toBuiltinData $MkClose cls
+      r = Redeemer $ PlutusTx.toBuiltinData $ MkClose cls
       lookups =
         Constraints.typedValidatorLookups (typedChannelValidator cpChannelId)
           P.<> Constraints.otherScript (channelValidator cpChannelId)
@@ -639,4 +640,4 @@ contract = selectList [open', dispute', close', forceClose'] >> contract
 
 -- TODO this is a helper just for testing, move this appropriately
 signState :: PrivateKey -> PrivateKey -> ChannelState -> SignedState
-signState keyA keyB state = SignedState {newState=state, sigA=signMessage' state keyA, sigB=signMessage' state keyB}
+signState keyA keyB state = SignedState {newState = state, sigA = signMessage' state keyA, sigB = signMessage' state keyB}

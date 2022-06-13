@@ -3,6 +3,7 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeApplications #-}
@@ -11,62 +12,50 @@
 
 module PerunPlutus.PerunDummySpec where
 
-import Control.Lens ((^.))
+import Control.Lens hiding (both)
 import Data.Data
 import Data.Text (Text)
-import qualified Ledger
+import Data.Tuple.Extra (both)
 import qualified Ledger.Ada as Ada
+import Ledger.Address
 import qualified Ledger.Value as Value
 import PerunDummy
-import Plutus.Contract
-import Plutus.Contract.Test (Wallet, minLogLevel, mockWalletPaymentPubKeyHash, w1, w2, w3)
-import qualified Plutus.Contract.Test.ContractModel as CM
+import Plutus.Contract.Oracle
+import Plutus.Contract.Test (Wallet, mockWalletPaymentPubKey, mockWalletPaymentPubKeyHash, w1, w2, w3)
+import Plutus.Contract.Test.ContractModel
 import qualified Plutus.Trace.Emulator as Trace
-import qualified PlutusTx.Prelude as PP
-import Test.Hspec
-  ( Spec,
-    describe,
-    it,
-  )
-import Test.Hspec.Expectations.Pretty
 import Test.QuickCheck as QC hiding (checkCoverage, (.&&.))
 
-spec :: Spec
-spec =
-  describe "PerunPlutus" $
-    it "does nothing yet" $ 1 `shouldBe` 1
-
 wallets :: [Wallet]
-wallets = [w1, w2]
+wallets = [w1, w2, w3]
 
 exVal :: Value.Value
 exVal = Ada.lovelaceValueOf 1
 
-data PerunModel
-  = PerunModel
-      -- Channel participants.
-      [Wallet]
-      -- Externally tracked channelstate.
-      ChannelState
-  deriving (Show, Eq, Data)
+newtype PerunModel = PerunModel (Maybe ChannelState) deriving (Show, Eq, Data)
 
-deriving instance Eq (CM.ContractInstanceKey PerunModel w schema err params)
+deriving instance Eq (ContractInstanceKey PerunModel w schema err params)
 
-deriving instance Ord (CM.ContractInstanceKey PerunModel w schema err params)
+deriving instance Ord (ContractInstanceKey PerunModel w schema err params)
 
-deriving instance Show (CM.ContractInstanceKey PerunModel w schema err params)
+deriving instance Show (ContractInstanceKey PerunModel w schema err params)
 
-instance CM.ContractModel PerunModel where
-  -- Commands available to a testcase.
+instance ContractModel PerunModel where
+  {--
+   - On-chain actions.
+   - Only supporting two party channels for now.
+  --}
   data Action PerunModel
-    = -- On-chain actions.
-      Fund Wallet Integer
-    | Open Wallet OpenParams
-    | Close Wallet CloseParams
-    | ForceClose Wallet ForceCloseParams
-    | Dispute Wallet DisputeParams
+    = -- | Open Wallet (Wallet, Wallet) -> ChannelID -> BalanceA -> BalanceB.
+      Open Wallet (Wallet, Wallet) Integer Integer Integer
+    | -- | Close Wallet -> ChannelID -> BalanceA -> BalanceB -> Version.
+      Close (Wallet, Wallet) Integer Integer Integer Integer
+    | -- | ForceClosing Wallet -> ChannelID.
+      ForceClose Wallet Integer
+    | -- | Disputing -> ChannelID -> BalanceA -> BalanceB -> Version -> Final.
+      Dispute (Wallet, Wallet) Integer Integer Integer Integer Bool
     | Withdraw Wallet Integer
-    | -- Off-chain actions.
+    | -- | Off-chain action of updating the channelstate.
       Update ChannelState
     deriving stock (Show, Eq)
     deriving (Data)
@@ -75,80 +64,131 @@ instance CM.ContractModel PerunModel where
     -- Only one type of contract under test, so we define the
     -- `ContractInstanceKey` with a single constructor distinguished by the
     -- wallet they are running in.
-    Participant :: Wallet -> CM.ContractInstanceKey PerunModel () ChannelSchema Text ()
+    Participant :: Wallet -> ContractInstanceKey PerunModel () ChannelSchema Text ()
 
-  initialInstances = (`CM.StartContract` ()) . Participant <$> wallets
+  initialInstances = (`StartContract` ()) . Participant <$> wallets
 
   instanceContract _ Participant {} _ = contract
 
   instanceWallet (Participant w) = w
 
-  arbitraryAction curState =
-    let cs = curState ^. CM.contractState
-     in oneof
-          [ Open <$> genWallet <*> genOpen cs,
-            Close <$> genWallet <*> genClose cs,
-            ForceClose <$> genWallet <*> genForceClose cs,
-            Dispute <$> genWallet <*> genDispute cs,
-            Withdraw <$> genWallet <*> genValue,
-            Update <$> genUpdate cs
-          ]
+  arbitraryAction _ = undefined
 
-  initialState = PerunModel wallets emptyChannelState
+  -- Initially there is not channel.
+  initialState = PerunModel Nothing
 
-  nextState (Open w op) = undefined
-  nextState (Update cs) = undefined
-  nextState (Dispute w dp) = undefined
-  nextState (Close w cp) = undefined
-  nextState (ForceClose w fcp) = undefined
-  nextState (Withdraw w a) = undefined
-
-  precondition s (Open w op) = undefined
-  precondition s (Update cs) = undefined
-  precondition s (Dispute w dp) = undefined
-  precondition s (Close w cp) = undefined
-  precondition s (ForceClose w fcp) = undefined
-  precondition s (Withdraw w a) = undefined
+  -- Opening a channel sets the agreed upon initial `ChannelState` for the
+  -- channel.
+  -- Furthermore the `Contract` managing the funds has to know that it holds
+  -- the balances for each wallet.
+  nextState (Open wf (_, _) cid balA balB) = do
+    modifyContractState $ \_ ->
+      PerunModel
+        ( Just $
+            ChannelState
+              { channelId = cid,
+                balanceA = balA,
+                balanceB = balB,
+                version = 0,
+                final = False
+              }
+        )
+    -- Move funds from chan -> Contract instance.
+    withdraw wf $ Ada.lovelaceValueOf (balA + balB)
+    wait 1
+  nextState (Update cs) = do
+    modifyContractState $ \_ -> PerunModel . Just $ cs
+    wait 1
+  -- Disputing does nothing to the contract state, yet.
+  nextState Dispute {} = return ()
+  -- Closing does nothing to the contract state, yet.
+  nextState Close {} = do
+    wait 1
+  -- ForceClosing does nothing to the contract state, yet.
+  nextState ForceClose {} = return ()
+  -- A wallet `w` withdrawing removes funds which were deposited from the
+  -- contract.
+  nextState (Withdraw w a) = deposit w $ Ada.lovelaceValueOf a
 
   perform handle _ s cmd = case cmd of
-    (Open w op) -> do
-      Trace.callEndpoint @"open" (handle $ Participant w) op
-    (Update cs) -> undefined
-    (Dispute w dp) -> do
-      Trace.callEndpoint @"dispute" (handle $ Participant w) dp
-    (Close w cp) ->
-      Trace.callEndpoint @"close" (handle $ Participant w) cp
-    (ForceClose w fcp) ->
-      Trace.callEndpoint @"forceClose" (handle $ Participant w) fcp
-    (Withdraw w a) -> undefined
+    (Open wf (wa, wb) cid balA balB) -> do
+      Trace.callEndpoint @"open"
+        (handle $ Participant wf)
+        ( OpenParams
+            cid
+            (mockWalletPaymentPubKey wa)
+            (mockWalletPaymentPubKey wb)
+            (mockWalletPaymentPubKeyHash wa)
+            (mockWalletPaymentPubKeyHash wb)
+            balA
+            balB
+            30_000_000
+        )
+      delay 1
+    Update {} -> do
+      -- Update is an offchain action, so we do not perform any computation
+      -- onchain wise.
+      return ()
+    Dispute {} -> do
+      return ()
+    (Close (wa, wb) cid balA balB v) -> do
+      let cs = s ^. contractState
+      chan <- case cs of
+        PerunModel Nothing -> Trace.throwError . Trace.GenericError $ "no channel to close"
+        PerunModel (Just chan) -> return chan
+      (pa, pb) <- (,) <$> Trace.agentState wa <*> Trace.agentState wb <&> both (unPaymentPrivateKey . Trace.ownPaymentPrivateKey)
 
-  shrinkAction s Open {} = undefined
-  shrinkAction s Close {} = undefined
-  shrinkAction s ForceClose {} = undefined
-  shrinkAction s Dispute {} = undefined
-  shrinkAction s Update {} = undefined
-  shrinkAction s Withdraw {} = undefined
+      Trace.callEndpoint @"close"
+        (handle $ Participant wa)
+        ( CloseParams
+            cid
+            balA
+            balB
+            v
+            True
+            (signMessage' chan pa)
+            (signMessage' chan pb)
+        )
+      delay 1
+    ForceClose {} ->
+      return ()
+    (Withdraw _ _) -> do
+      -- TODO:
+      -- Understand the semantics for `perform` vs `nextState`.
+      -- `nextState` progresses the tests statemachine, updating the
+      -- `PerunModel`, while `perform` is mainly used to call
+      -- `ContractEndpoint`s.
+      -- It does not seem like it is intended, since updating a wallets state
+      -- at this point is overly complicated.
+      -- Withdrawing might need an implementation where the tokens are claimed
+      -- by the users. But I am not sure, so we leave it be until we realize
+      -- the testcase will fail.
+      return ()
 
-emptyChannelState :: ChannelState
-emptyChannelState = ChannelState 0 0 0 0
+-- Testcases
 
-genWallet :: Gen Wallet
-genWallet = elements wallets
+-- unitTest example of creating a channel, updating it once and closing.
+unitTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
+unitTest (wa, wb, wf) = do
+  (initBalA, initBalB) <- forAllQ $ both chooseQ ((5_000_000, 20_000_000), (5_000_000, 20_000_000))
+  action $ Open wf (wa, wb) 42069 initBalA initBalB
 
-genValue :: Gen Integer
-genValue = choose (Ada.getLovelace Ledger.minAdaTxOut, 100_000_000)
+  modChSt <-
+    getContractState >>= \case
+      PerunModel Nothing -> fail "opening a channel should be tracked in PerunModel"
+      PerunModel (Just cs) -> modifyChannelStateA cs 420
+  action $ Update modChSt
 
-genOpen :: PerunModel -> Gen OpenParams
-genOpen _m = undefined
+  getContractState >>= \case
+    PerunModel Nothing -> fail "unclosed channel should persist in PerunModel"
+    PerunModel (Just (ChannelState cid ba bb v _)) -> action $ Close (wa, wb) cid ba bb v
 
-genClose :: PerunModel -> Gen CloseParams
-genClose _m = undefined
+modifyChannelStateA :: ChannelState -> Integer -> DL PerunModel ChannelState
+modifyChannelStateA cs@(ChannelState _ bA bB v _) delta = do
+  return cs {balanceA = bA - delta, balanceB = bB + delta, version = v + 1}
 
-genForceClose :: PerunModel -> Gen ForceCloseParams
-genForceClose _m = undefined
+propPerunDummy :: Actions PerunModel -> Property
+propPerunDummy = propRunActions_
 
-genDispute :: PerunModel -> Gen DisputeParams
-genDispute _m = undefined
-
-genUpdate :: PerunModel -> Gen ChannelState
-genUpdate _m = undefined
+propUnitTest :: Property
+propUnitTest = withMaxSuccess 1 $ forAllDL (unitTest (w1, w2, w3)) propPerunDummy

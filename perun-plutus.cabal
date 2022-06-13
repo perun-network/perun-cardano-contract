@@ -90,4 +90,5 @@ test-suite perun-plutus-test
                     , plutus-tx
                     , lens
                     , text
+                    , extra
   build-tool-depends: hspec-discover:hspec-discover == 2.*
