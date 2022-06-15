@@ -58,7 +58,7 @@ import Playground.Contract (ensureKnownCurrencies, printJson, printSchemas, stag
 import Playground.TH (mkKnownCurrencies, mkSchemaDefinitions)
 import Playground.Types (KnownCurrency (..))
 import Plutus.Contract
-import Plutus.Contract.Oracle (verifySignedMessageOnChain)
+import Plutus.Contract.Oracle (verifySignedMessageOnChain, SignedMessage(..), SignedMessageCheckError(..))
 import qualified PlutusTx
 import PlutusTx.Prelude hiding (unless)
 import Schema (ToSchema)
@@ -101,7 +101,8 @@ data ChannelState = ChannelState
   { channelId :: !ChannelID,
     balanceA :: !Integer,
     balanceB :: !Integer,
-    version :: !Integer
+    version :: !Integer,
+    final :: !Bool
   }
   deriving (Data)
   deriving stock (P.Eq, P.Show)
@@ -112,25 +113,37 @@ instance Eq ChannelState where
     (channelId b == channelId c)
       && (balanceA b == balanceA c)
       && (balanceB b == balanceB c)
-      && (version b == version c)
+      && (version b  == version c)
+      && (final b    == final c)
 
 PlutusTx.unstableMakeIsData ''ChannelState
 PlutusTx.makeLift ''ChannelState
 
-data Dispute = Dispute
-  { newState :: !ChannelState
+
+data SignedState = SignedState
+  { newState :: !ChannelState,
+    sigA :: !(SignedMessage ChannelState),
+    keyA :: !PaymentPubKey,
+    sigB :: !(SignedMessage ChannelState),
+    keyB :: !PaymentPubKey
   }
   deriving (P.Show)
 
-instance Eq Dispute where
+instance Eq SignedState where
   {-# INLINEABLE (==) #-}
-  b == c = newState b == newState c
+  b == c = (newState b == newState c) &&
+           (sigA b     == sigA     c) &&
+           (keyA b     == keyA     c) &&
+           (sigB b     == sigB     c) &&
+           (keyB b     == keyB     c)
 
-PlutusTx.unstableMakeIsData ''Dispute
-PlutusTx.makeLift ''Dispute
+PlutusTx.unstableMakeIsData ''SignedState
+PlutusTx.makeLift ''SignedState
+
+
 
 -- Redeemer Datatype
-data ChannelAction = MkDispute Dispute | Close | ForceClose
+data ChannelAction = MkDispute SignedState | MkClose SignedState | ForceClose
   deriving (P.Show)
 
 PlutusTx.unstableMakeIsData ''ChannelAction
@@ -174,13 +187,13 @@ isValidStateTransition old new =
 verifyOnChain :: BuiltinByteString -> BuiltinByteString -> BuiltinByteString -> Bool
 verifyOnChain = verifySignature
 
--- verifySignedMessageOnChain'
---   :: FromData a =>
---      ScriptContext
---      -> PaymentPubKey
---      -> SignedMessage a
---      -> Either SignedMessageCheckError a
--- verifySignedMessageOnChain' = verifySignedMessageOnChain
+verifySignedMessageOnChain'
+  :: PlutusTx.FromData a =>
+    ScriptContext
+    -> PaymentPubKey
+    -> SignedMessage a
+    -> Either SignedMessageCheckError a
+verifySignedMessageOnChain' = verifySignedMessageOnChain
 --
 -- There is also:
 -- signMessage
@@ -205,12 +218,12 @@ mkChannelValidator cID oldDatum action ctx =
   traceIfFalse "wrong input value" correctInputValue
     && case action of
       -- Dispute Case:
-      MkDispute Dispute {..} ->
+      MkDispute SignedState {..} ->
         -- check that the state transition is valid
         traceIfFalse "invalid state transition" (isValidStateTransition oldState (state outputDatum))
           &&
           -- check that the channel id in the state in the dispute matches the actual channel id
-          traceIfFalse "state in dispute does not belong to this channel" ((channelId (state outputDatum)) == cID)
+          traceIfFalse "state in dispute does not belong to this channel" (channelId (state outputDatum) == cID)
           &&
           -- check that the state in the dispute is reflected in the output datum
           traceIfFalse "output state does not match the state in the dispute" (newState == state outputDatum)
@@ -226,10 +239,40 @@ mkChannelValidator cID oldDatum action ctx =
           &&
           -- check that the channel is marked as disputed
           traceIfFalse "failed to mark channel as disputed" (disputed outputDatum)
+          &&
+          -- check that A's supplied key is correct
+          traceIfFalse "A's supplied keys do not match their key in the channel parameters" (verifyKeysMatch keyA (pPartyA (channelParameters oldDatum)))
+          &&
+          -- check that B's supplied key is correct
+          traceIfFalse "B's supplied keys do not match their key in the channel parameters" (verifyKeysMatch keyB (pPartyB (channelParameters oldDatum)))
+          &&
+          -- check that A's signature on the new state is valid
+          traceIfFalse "A's signed state does not match the state in the dispute" (getStateFromValidSignature keyA sigA == newState)
+          &&
+          -- check that B's signature on the new state is valid
+          traceIfFalse "B's signed state does not match the state in the dispute" (getStateFromValidSignature keyB sigB == newState)
       -- Close Case
-      Close ->
-        -- Usually, we would need a signature check here!
-        True
+      MkClose SignedState {..}->
+          -- check that A's supplied key is correct
+          traceIfFalse "A's supplied keys do not match their key in the channel parameters" (verifyKeysMatch keyA (pPartyA (channelParameters oldDatum)))
+          &&
+          -- check that B's supplied key is correct
+          traceIfFalse "B's supplied keys do not match their key in the channel parameters" (verifyKeysMatch keyB (pPartyB (channelParameters oldDatum)))
+          &&
+          -- check that A's signature on the new state is valid
+          traceIfFalse "A's signed state does not match the state in the dispute" (getStateFromValidSignature keyA sigA == newState)
+          &&
+          -- check that B's signature on the new state is valid
+          traceIfFalse "B's signed state does not match the state in the dispute" (getStateFromValidSignature keyB sigB == newState)
+          &&
+          -- check that the state is final
+          traceIfFalse "The closing state is not final" (final newState)
+          &&
+          -- check that A receives their balance
+          traceIfFalse "Party A did not get their balance" (getsValue (pPartyA (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceA newState))
+           &&
+          -- check that B receives their balance
+          traceIfFalse "Party B did not get their balance" (getsValue (pPartyB (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceB newState))
       -- ForceClose Case
       ForceClose ->
         -- check that there was a prior dispute
@@ -299,6 +342,16 @@ mkChannelValidator cID oldDatum action ctx =
     getPOSIXTimeFromUpperBound :: UpperBound POSIXTime -> POSIXTime
     getPOSIXTimeFromUpperBound (UpperBound (Finite t) _) = t
     getPOSIXTimeFromUpperBound _ = traceError "unable to verify time"
+
+    getStateFromValidSignature :: PaymentPubKey -> SignedMessage ChannelState -> ChannelState
+    getStateFromValidSignature key sm = let
+                                       x = verifySignedMessageOnChain' ctx key sm
+                                     in case x of
+                                       Left _ -> traceError "Signature on signed state is invalid"
+                                       Right state -> state
+
+    verifyKeysMatch :: PaymentPubKey -> PaymentPubKeyHash -> Bool
+    verifyKeysMatch pk pkh = paymentPubKeyHash pk == pkh
 
     -- TODO: How can we check that the difference between the end of txInfoValidRange and the time specified in the datum is not too big???
     --         There seems to be no width function for intervals ...
@@ -378,7 +431,12 @@ data DisputeParams = DisputeParams
   { dpChannelId :: !ChannelID,
     dpBalanceA :: !Integer,
     dpBalanceB :: !Integer,
-    dpVersion :: !Integer
+    dpVersion :: !Integer,
+    dpFinal :: !Bool,
+    dpKeyA :: !PaymentPubKey,
+    dpSigA :: !(SignedMessage ChannelState),
+    dpKeyB :: !PaymentPubKey,
+    dpSigB :: !(SignedMessage ChannelState)
   }
   deriving (Generic, ToJSON, FromJSON, ToSchema, Data)
   deriving stock (P.Eq, P.Show)
@@ -386,7 +444,13 @@ data DisputeParams = DisputeParams
 data CloseParams = CloseParams
   { cpChannelId :: !ChannelID,
     cpBalanceA :: !Integer,
-    cpBalanceB :: !Integer
+    cpBalanceB :: !Integer,
+    cpVersion :: !Integer,
+    cpFinal :: !Bool,
+    cpKeyA :: !PaymentPubKey,
+    cpSigA :: !(SignedMessage ChannelState),
+    cpKeyB :: !PaymentPubKey,
+    cpSigB :: !(SignedMessage ChannelState)
   }
   deriving (Generic, ToJSON, FromJSON, ToSchema, Data)
   deriving stock (P.Eq, P.Show)
@@ -422,7 +486,8 @@ open OpenParams {..} = do
           { channelId = spChannelId,
             balanceA = spBalanceA,
             balanceB = spBalanceB,
-            version = 0
+            version = 0,
+            final = False
           }
       d =
         ChannelDatum
@@ -453,9 +518,16 @@ dispute DisputeParams {..} = do
           { channelId = dpChannelId,
             balanceA = dpBalanceA,
             balanceB = dpBalanceB,
-            version = dpVersion
+            version = dpVersion,
+            final = dpFinal
           }
-      disp = Dispute {newState = s}
+      disp = SignedState
+          { newState = s,
+            keyA = dpKeyA,
+            sigA = dpSigA,
+            keyB = dpKeyB,
+            sigB = dpSigB
+          }
       newDatum =
         d
           { state = s,
