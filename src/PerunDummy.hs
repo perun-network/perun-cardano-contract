@@ -32,11 +32,9 @@ module PerunDummy
     close,
     forceClose,
     contract,
-    schemas,
     ensureKnownCurrencies,
     printJson,
     printSchemas,
-    registeredKnownCurrencies,
     stage,
   )
 where
@@ -64,6 +62,7 @@ import PlutusTx.Prelude hiding (unless)
 import Schema (ToSchema)
 import Text.Printf (printf)
 import qualified Prelude as P
+import Plutus.V1.Ledger.Api (fromBytes)
 
 --
 --
@@ -184,16 +183,9 @@ isValidStateTransition old new =
     && (version old < version new)
 
 -- Onchain signature verification.
-verifyOnChain :: BuiltinByteString -> BuiltinByteString -> BuiltinByteString -> Bool
-verifyOnChain = verifySignature
+--verifyOnChain :: BuiltinByteString -> BuiltinByteString -> BuiltinByteString -> Bool
+--verifyOnChain = verifySignature
 
-verifySignedMessageOnChain'
-  :: PlutusTx.FromData a =>
-    ScriptContext
-    -> PaymentPubKey
-    -> SignedMessage a
-    -> Either SignedMessageCheckError a
-verifySignedMessageOnChain' = verifySignedMessageOnChain
 --
 -- There is also:
 -- signMessage
@@ -345,7 +337,7 @@ mkChannelValidator cID oldDatum action ctx =
 
     getStateFromValidSignature :: PaymentPubKey -> SignedMessage ChannelState -> ChannelState
     getStateFromValidSignature key sm = let
-                                       x = verifySignedMessageOnChain' ctx key sm
+                                       x = verifySignedMessageOnChain ctx key sm
                                      in case x of
                                        Left _ -> traceError "Signature on signed state is invalid"
                                        Right state -> state
@@ -418,13 +410,13 @@ data OpenParams = OpenParams
     -- Using `BuiltinByteString` here because `PaymentPubKeyHash` has no
     -- `Data.Data` instance defined. There are better solutions but this works
     -- as an initial solution.
-    spPartyA :: !BuiltinByteString,
-    spPartyB :: !BuiltinByteString,
+    spPartyA :: !PaymentPubKeyHash,
+    spPartyB :: !PaymentPubKeyHash,
     spBalanceA :: !Integer,
     spBalanceB :: !Integer,
     spTimeLock :: !Integer
   }
-  deriving (Generic, ToJSON, FromJSON, ToSchema, Data)
+  deriving (Generic, ToJSON, FromJSON, ToSchema)
   deriving stock (P.Eq, P.Show)
 
 data DisputeParams = DisputeParams
@@ -438,7 +430,7 @@ data DisputeParams = DisputeParams
     dpKeyB :: !PaymentPubKey,
     dpSigB :: !(SignedMessage ChannelState)
   }
-  deriving (Generic, ToJSON, FromJSON, ToSchema, Data)
+  deriving (Generic, ToJSON, FromJSON)
   deriving stock (P.Eq, P.Show)
 
 data CloseParams = CloseParams
@@ -452,13 +444,13 @@ data CloseParams = CloseParams
     cpKeyB :: !PaymentPubKey,
     cpSigB :: !(SignedMessage ChannelState)
   }
-  deriving (Generic, ToJSON, FromJSON, ToSchema, Data)
+  deriving (Generic, ToJSON, FromJSON)
   deriving stock (P.Eq, P.Show)
 
 data ForceCloseParams = ForceCloseParams
   { fpChannelId :: !ChannelID
   }
-  deriving (Generic, ToJSON, FromJSON, ToSchema, Data)
+  deriving (Generic, ToJSON, FromJSON)
   deriving stock (P.Eq, P.Show)
 
 type ChannelSchema =
@@ -478,8 +470,9 @@ open OpenParams {..} = do
   let c =
         Channel
           { pTimeLock = spTimeLock,
-            pPartyA = PaymentPubKeyHash . PubKeyHash $ spPartyA,
-            pPartyB = PaymentPubKeyHash . PubKeyHash $ spPartyB
+          -- FIXME
+            pPartyA = spPartyA,
+            pPartyB = spPartyB
           }
       s =
         ChannelState
@@ -523,10 +516,10 @@ dispute DisputeParams {..} = do
           }
       disp = SignedState
           { newState = s,
-            keyA = dpKeyA,
             sigA = dpSigA,
-            keyB = dpKeyB,
-            sigB = dpSigB
+            keyA = dpKeyA,
+            sigB = dpSigB,
+            keyB = dpKeyB
           }
       newDatum =
         d
@@ -557,7 +550,24 @@ close :: forall w s. CloseParams -> Contract w s Text ()
 close CloseParams {..} = do
   (oref, o, d@ChannelDatum {..}) <- findChannel cpChannelId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
-  let r = Redeemer $ PlutusTx.toBuiltinData Close
+  unless cpFinal $
+    throwError $ pack $ printf "can not close unless state is final"
+  let s =
+        ChannelState
+          { channelId = cpChannelId,
+            balanceA = cpBalanceA,
+            balanceB = cpBalanceB,
+            version = cpVersion,
+            final = cpFinal
+          }
+      cls = SignedState
+          { newState = s,
+            sigA = cpSigA,
+            keyA = cpKeyA,
+            sigB = cpSigB,
+            keyB = cpKeyB
+          }
+      r = Redeemer $ PlutusTx.toBuiltinData $MkClose cls
       lookups =
         Constraints.typedValidatorLookups (typedChannelValidator cpChannelId)
           P.<> Constraints.otherScript (channelValidator cpChannelId)
@@ -633,7 +643,3 @@ contract = selectList [open', dispute', close', forceClose'] >> contract
     dispute' = endpoint @"dispute" dispute
     close' = endpoint @"close" close
     forceClose' = endpoint @"forceClose" forceClose
-
-mkSchemaDefinitions ''ChannelSchema
-
-mkKnownCurrencies []
