@@ -81,8 +81,8 @@ defaultValidMsRange = 10000 :: POSIXTime
 -- Parameters of the channel
 data Channel = Channel
   { pTimeLock :: !Integer,
-    pPartyA :: !PaymentPubKeyHash,
-    pPartyB :: !PaymentPubKeyHash
+    pPartyA :: !PaymentPubKey,
+    pPartyB :: !PaymentPubKey
   }
   deriving (P.Show, Generic, ToJSON, FromJSON, ToSchema)
 
@@ -122,9 +122,7 @@ PlutusTx.makeLift ''ChannelState
 data SignedState = SignedState
   { newState :: !ChannelState,
     sigA :: !(SignedMessage ChannelState),
-    keyA :: !PaymentPubKey,
-    sigB :: !(SignedMessage ChannelState),
-    keyB :: !PaymentPubKey
+    sigB :: !(SignedMessage ChannelState)
   }
   deriving (P.Show)
 
@@ -132,9 +130,7 @@ instance Eq SignedState where
   {-# INLINEABLE (==) #-}
   b == c = (newState b == newState c) &&
            (sigA b     == sigA     c) &&
-           (keyA b     == keyA     c) &&
-           (sigB b     == sigB     c) &&
-           (keyB b     == keyB     c)
+           (sigB b     == sigB     c)
 
 PlutusTx.unstableMakeIsData ''SignedState
 PlutusTx.makeLift ''SignedState
@@ -233,38 +229,41 @@ mkChannelValidator cID oldDatum action ctx =
           traceIfFalse "failed to mark channel as disputed" (disputed outputDatum)
           &&
           -- check that A's supplied key is correct
-          traceIfFalse "A's supplied keys do not match their key in the channel parameters" (verifyKeysMatch keyA (pPartyA (channelParameters oldDatum)))
-          &&
+          -- traceIfFalse "A's supplied keys do not match their key in the channel parameters" (verifyKeysMatch keyA (pPartyA (channelParameters oldDatum)))
+          -- &&
           -- check that B's supplied key is correct
-          traceIfFalse "B's supplied keys do not match their key in the channel parameters" (verifyKeysMatch keyB (pPartyB (channelParameters oldDatum)))
-          &&
+          -- traceIfFalse "B's supplied keys do not match their key in the channel parameters" (verifyKeysMatch keyB (pPartyB (channelParameters oldDatum)))
+          -- &&
           -- check that A's signature on the new state is valid
-          traceIfFalse "A's signed state does not match the state in the dispute" (getStateFromValidSignature keyA sigA == newState)
+          traceIfFalse "A's signed state does not match the state in the dispute" (getStateFromValidSignature (pPartyA (channelParameters oldDatum)) sigA == newState)
           &&
           -- check that B's signature on the new state is valid
-          traceIfFalse "B's signed state does not match the state in the dispute" (getStateFromValidSignature keyB sigB == newState)
+          traceIfFalse "B's signed state does not match the state in the dispute" (getStateFromValidSignature (pPartyB (channelParameters oldDatum)) sigB == newState)
       -- Close Case
       MkClose SignedState {..}->
+          -- 
+          traceIfFalse "Closing state does not belong to this channel" (cID == channelId newState)
+          &&
           -- check that A's supplied key is correct
-          traceIfFalse "A's supplied keys do not match their key in the channel parameters" (verifyKeysMatch keyA (pPartyA (channelParameters oldDatum)))
-          &&
+          --traceIfFalse "A's supplied keys do not match their key in the channel parameters" (verifyKeysMatch keyA (pPartyA (channelParameters oldDatum)))
+          -- &&
           -- check that B's supplied key is correct
-          traceIfFalse "B's supplied keys do not match their key in the channel parameters" (verifyKeysMatch keyB (pPartyB (channelParameters oldDatum)))
-          &&
+          --traceIfFalse "B's supplied keys do not match their key in the channel parameters" (verifyKeysMatch keyB (pPartyB (channelParameters oldDatum)))
+          -- &&
           -- check that A's signature on the new state is valid
-          traceIfFalse "A's signed state does not match the state in the dispute" (getStateFromValidSignature keyA sigA == newState)
+          traceIfFalse "A's signed state does not match the state in the dispute" (getStateFromValidSignature (pPartyA (channelParameters oldDatum)) sigA == newState)
           &&
           -- check that B's signature on the new state is valid
-          traceIfFalse "B's signed state does not match the state in the dispute" (getStateFromValidSignature keyB sigB == newState)
+          traceIfFalse "B's signed state does not match the state in the dispute" (getStateFromValidSignature (pPartyB (channelParameters oldDatum)) sigB == newState)
           &&
           -- check that the state is final
           traceIfFalse "The closing state is not final" (final newState)
           &&
           -- check that A receives their balance
-          traceIfFalse "Party A did not get their balance" (getsValue (pPartyA (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceA newState))
+          traceIfFalse "Party A did not get their balance" (getsValue (paymentPubKeyHash (pPartyA (channelParameters oldDatum))) $ Ada.lovelaceValueOf (balanceA newState))
            &&
           -- check that B receives their balance
-          traceIfFalse "Party B did not get their balance" (getsValue (pPartyB (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceB newState))
+          traceIfFalse "Party B did not get their balance" (getsValue (paymentPubKeyHash (pPartyB (channelParameters oldDatum))) $ Ada.lovelaceValueOf (balanceB newState))
       -- ForceClose Case
       ForceClose ->
         -- check that there was a prior dispute
@@ -274,10 +273,10 @@ mkChannelValidator cID oldDatum action ctx =
           traceIfFalse "too early" correctForceCloseSlotRange
           &&
           -- check that Party A receives their balance
-          traceIfFalse "Party A did not get their balance" (getsValue (pPartyA (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceA oldState))
+          traceIfFalse "Party A did not get their balance" (getsValue (paymentPubKeyHash (pPartyA (channelParameters oldDatum))) $ Ada.lovelaceValueOf (balanceA oldState))
           &&
           -- check that Party B receives their balance
-          traceIfFalse "Party B did not get their balance" (getsValue (pPartyB (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceB oldState))
+          traceIfFalse "Party B did not get their balance" (getsValue (paymentPubKeyHash (pPartyB (channelParameters oldDatum))) $ Ada.lovelaceValueOf (balanceB oldState))
   where
     --- The out-scripts view of the transaction body of the consuming transaction
     info :: TxInfo
@@ -342,14 +341,8 @@ mkChannelValidator cID oldDatum action ctx =
                                        Left _ -> traceError "Signature on signed state is invalid"
                                        Right state -> state
 
-    verifyKeysMatch :: PaymentPubKey -> PaymentPubKeyHash -> Bool
-    verifyKeysMatch pk pkh = paymentPubKeyHash pk == pkh
-
-    -- TODO: How can we check that the difference between the end of txInfoValidRange and the time specified in the datum is not too big???
-    --         There seems to be no width function for intervals ...
-    -- Check that the valid range of the consuming transaction is not bigger than some allowed margin
-    -- allowedValidRangeEnd :: Bool
-    -- allowedValidRangeEnd = (width (intersection (from (time outputDatum)) (txInfoValidRange info))) <= validMsDifference
+    --verifyKeysMatch :: PaymentPubKey -> PaymentPubKeyHash -> Bool
+    --verifyKeysMatch pk pkh = paymentPubKeyHash pk == pkh
 
     allowedValidRangeSize :: Bool
     allowedValidRangeSize = (getPOSIXEndTime (strictUpperBound (txInfoValidRange info)) - getPOSIXStartTime (strictLowerBound (txInfoValidRange info))) <= defaultValidMsRange
@@ -410,8 +403,8 @@ data OpenParams = OpenParams
     -- Using `BuiltinByteString` here because `PaymentPubKeyHash` has no
     -- `Data.Data` instance defined. There are better solutions but this works
     -- as an initial solution.
-    spPartyA :: !PaymentPubKeyHash,
-    spPartyB :: !PaymentPubKeyHash,
+    spPartyA :: !PaymentPubKey,
+    spPartyB :: !PaymentPubKey,
     spBalanceA :: !Integer,
     spBalanceB :: !Integer,
     spTimeLock :: !Integer
@@ -425,9 +418,7 @@ data DisputeParams = DisputeParams
     dpBalanceB :: !Integer,
     dpVersion :: !Integer,
     dpFinal :: !Bool,
-    dpKeyA :: !PaymentPubKey,
     dpSigA :: !(SignedMessage ChannelState),
-    dpKeyB :: !PaymentPubKey,
     dpSigB :: !(SignedMessage ChannelState)
   }
   deriving (Generic, ToJSON, FromJSON)
@@ -439,9 +430,7 @@ data CloseParams = CloseParams
     cpBalanceB :: !Integer,
     cpVersion :: !Integer,
     cpFinal :: !Bool,
-    cpKeyA :: !PaymentPubKey,
     cpSigA :: !(SignedMessage ChannelState),
-    cpKeyB :: !PaymentPubKey,
     cpSigB :: !(SignedMessage ChannelState)
   }
   deriving (Generic, ToJSON, FromJSON)
@@ -517,9 +506,7 @@ dispute DisputeParams {..} = do
       disp = SignedState
           { newState = s,
             sigA = dpSigA,
-            keyA = dpKeyA,
-            sigB = dpSigB,
-            keyB = dpKeyB
+            sigB = dpSigB
           }
       newDatum =
         d
@@ -563,9 +550,7 @@ close CloseParams {..} = do
       cls = SignedState
           { newState = s,
             sigA = cpSigA,
-            keyA = cpKeyA,
-            sigB = cpSigB,
-            keyB = cpKeyB
+            sigB = cpSigB
           }
       r = Redeemer $ PlutusTx.toBuiltinData $MkClose cls
       lookups =
@@ -573,8 +558,8 @@ close CloseParams {..} = do
           P.<> Constraints.otherScript (channelValidator cpChannelId)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
-        Constraints.mustPayToPubKey (pPartyA channelParameters) (Ada.lovelaceValueOf cpBalanceA)
-          <> Constraints.mustPayToPubKey (pPartyB channelParameters) (Ada.lovelaceValueOf cpBalanceB)
+        Constraints.mustPayToPubKey (paymentPubKeyHash (pPartyA channelParameters)) (Ada.lovelaceValueOf cpBalanceA)
+          <> Constraints.mustPayToPubKey (paymentPubKeyHash (pPartyB channelParameters)) (Ada.lovelaceValueOf cpBalanceB)
           <> Constraints.mustSpendScriptOutput oref r
   ledgerTx <- submitTxConstraintsWith lookups tx
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
@@ -602,8 +587,8 @@ forceClose ForceCloseParams {..} = do
           P.<> Constraints.otherScript (channelValidator fpChannelId)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
-        Constraints.mustPayToPubKey (pPartyA channelParameters) (Ada.lovelaceValueOf (balanceA state))
-          <> Constraints.mustPayToPubKey (pPartyB channelParameters) (Ada.lovelaceValueOf (balanceB state))
+        Constraints.mustPayToPubKey (paymentPubKeyHash (pPartyA channelParameters)) (Ada.lovelaceValueOf (balanceA state))
+          <> Constraints.mustPayToPubKey (paymentPubKeyHash (pPartyB channelParameters)) (Ada.lovelaceValueOf (balanceB state))
           <> Constraints.mustValidateIn (from (time + 1 + fromMilliSeconds (DiffMilliSeconds (pTimeLock channelParameters))))
           <> Constraints.mustSpendScriptOutput oref r
   ledgerTx <- submitTxConstraintsWith lookups tx
