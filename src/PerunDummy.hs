@@ -56,7 +56,7 @@ import Playground.Contract (ensureKnownCurrencies, printJson, printSchemas, stag
 import Playground.TH (mkKnownCurrencies, mkSchemaDefinitions)
 import Playground.Types (KnownCurrency (..))
 import Plutus.Contract
-import Plutus.Contract.Oracle (verifySignedMessageOnChain, SignedMessage(..), SignedMessageCheckError(..))
+import Plutus.Contract.Oracle (verifySignedMessageOnChain, SignedMessage(..), SignedMessageCheckError(..), signMessage')
 import qualified PlutusTx
 import PlutusTx.Prelude hiding (unless)
 import Schema (ToSchema)
@@ -446,7 +446,7 @@ data CloseParams = CloseParams
   deriving stock (P.Eq, P.Show)
 
 newtype ForceCloseParams = ForceCloseParams ChannelID
-  deriving (Generic)
+  deriving (Generic, ToJSON, FromJSON)
   deriving stock (P.Eq, P.Show)
 
 type ChannelSchema =
@@ -636,3 +636,7 @@ contract = selectList [open', dispute', close', forceClose'] >> contract
     dispute' = endpoint @"dispute" dispute
     close' = endpoint @"close" close
     forceClose' = endpoint @"forceClose" forceClose
+
+-- TODO this is a helper just for testing, move this appropriately
+signState :: PrivateKey -> PrivateKey -> ChannelState -> SignedState
+signState keyA keyB state = SignedState {newState=state, sigA=signMessage' state keyA, sigB=signMessage' state keyB}
