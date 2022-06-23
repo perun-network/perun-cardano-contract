@@ -61,7 +61,6 @@ import PlutusTx.Prelude hiding (unless)
 import Schema (ToSchema)
 import Text.Printf (printf)
 import qualified Prelude as P
-import qualified Cardano.Api as P
 
 --
 --
@@ -365,13 +364,9 @@ data OpenParams = OpenParams
   deriving stock (P.Eq, P.Show)
 
 data DisputeParams = DisputeParams
-  { dpChannelId :: !ChannelID,
-    dpBalanceA :: !Integer,
-    dpBalanceB :: !Integer,
-    dpVersion :: !Integer,
-    dpFinal :: !Bool,
-    dpSigA :: !(SignedMessage ChannelState),
-    dpSigB :: !(SignedMessage ChannelState)
+  { dpSigningPKA :: !PaymentPubKey,
+    dpSigningPKB :: !PaymentPubKey,
+    dpSignedState :: !SignedState
   }
   deriving (Generic, ToJSON, FromJSON)
   deriving stock (P.Eq, P.Show)
@@ -437,37 +432,27 @@ open OpenParams {..} = do
 --
 
 dispute :: forall w s. DisputeParams -> Contract w s Text ()
-dispute DisputeParams {..} = do
+dispute (DisputeParams pKA pKB sst@SignedState {..}) = do
+  let
+    dState = extractVerifiedState sst (pKA, pKB)
   t <- currentTime
-  (oref, o, d@ChannelDatum {..}) <- findChannel dpChannelId
+  (oref, o, d@ChannelDatum {..}) <- findChannel $ channelId dState
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
-  when (dpVersion <= version state) $
-    throwError $ pack $ printf "version no greater than current version number"
-  let s =
-        ChannelState
-          { channelId = dpChannelId,
-            balanceA = dpBalanceA,
-            balanceB = dpBalanceB,
-            version = dpVersion,
-            final = dpFinal
-          }
-      disp =
-        SignedState
-          { sigA = dpSigA,
-            sigB = dpSigB
-          }
+  unless (isValidStateTransition state dState) $
+    throwError $ pack $ printf "state transition in dispute invalid"
+  let 
       newDatum =
         d
-          { state = s,
+          { state = dState,
             time = t,
             disputed = True
           }
       v = Ada.lovelaceValueOf (balanceA state + balanceB state)
-      r = Redeemer $ PlutusTx.toBuiltinData $ MkDispute disp
+      r = Redeemer $ PlutusTx.toBuiltinData $ MkDispute sst
 
       lookups =
-        Constraints.typedValidatorLookups (typedChannelValidator dpChannelId)
-          P.<> Constraints.otherScript (channelValidator dpChannelId)
+        Constraints.typedValidatorLookups (typedChannelValidator $ channelId dState)
+          P.<> Constraints.otherScript (channelValidator $ channelId dState)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
         Constraints.mustPayToTheScript newDatum v
@@ -475,7 +460,7 @@ dispute DisputeParams {..} = do
           <> Constraints.mustSpendScriptOutput oref r
   ledgerTx <- submitTxConstraintsWith lookups tx
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
-  logInfo @P.String $ printf "made dispute of new state %s" (P.show s)
+  logInfo @P.String $ printf "made dispute of new state %s" (P.show dState)
 
 --
 -- close logic
@@ -489,7 +474,7 @@ close (CloseParams pKA pKB sst@SignedState {..}) = do
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   unless final $
     throwError $ pack $ printf "can not close unless state is final"
-  let 
+  let
     r = Redeemer $ PlutusTx.toBuiltinData $ MkClose sst
     lookups =
       Constraints.typedValidatorLookups (typedChannelValidator channelId)

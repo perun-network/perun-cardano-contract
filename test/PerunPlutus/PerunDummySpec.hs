@@ -25,7 +25,6 @@ import Plutus.Contract.Test (Wallet, mockWalletPaymentPubKey, mockWalletPaymentP
 import Plutus.Contract.Test.ContractModel
 import qualified Plutus.Trace.Emulator as Trace
 import qualified Wallet.Emulator.Wallet as Trace
-import Test.QuickCheck as QC hiding (checkCoverage, (.&&.))
 
 wallets :: [Wallet]
 wallets = [w1, w2, w3]
@@ -33,7 +32,7 @@ wallets = [w1, w2, w3]
 exVal :: Value.Value
 exVal = Ada.lovelaceValueOf 1
 
-newtype PerunModel = PerunModel (Maybe ChannelState) deriving (Show, Eq, Data)
+newtype PerunModel = PerunModel (Maybe (ChannelState, Integer)) deriving (Show, Eq, Data)
 
 deriving instance Eq (ContractInstanceKey PerunModel w schema err params)
 
@@ -47,18 +46,20 @@ instance ContractModel PerunModel where
    - Only supporting two party channels for now.
   --}
   data Action PerunModel
-    = -- | Open Wallet (Wallet, Wallet) -> ChannelID -> BalanceA -> BalanceB.
-      Open Wallet (Wallet, Wallet) Integer Integer Integer
-    | -- | Close Wallet -> ChannelID -> BalanceA -> BalanceB -> Version.
-      Close (Wallet, Wallet) Integer Integer Integer Integer
-    | -- | ForceClosing Wallet -> ChannelID.
-      ForceClose Wallet Integer
-    | -- | Disputing -> ChannelID -> BalanceA -> BalanceB -> Version -> Final.
-      Dispute (Wallet, Wallet) Integer Integer Integer Integer Bool
+    = -- | Open Wallet (Wallet, Wallet) -> ChannelID -> BalanceA -> BalanceB -> timelock.
+      Open Wallet (Wallet, Wallet) Integer Integer Integer Integer
+    | -- | Close Issuer -> (Wallet, Wallet) -> ChannelID -> BalanceA -> BalanceB -> Version.
+      Close Wallet (Wallet, Wallet) Integer Integer Integer Integer
+    | -- | ForceClosing Issuer -> (Wallet, Wallet) -> ChannelID.
+      ForceClose Wallet (Wallet, Wallet) Integer
+    | -- | Disputing -> Issuer (Wallet, Wallet) -> ChannelId -> ChannelState
+      Dispute Wallet (Wallet, Wallet) Integer ChannelState
     | -- | Off-chain action of updating the channelstate.
       Update ChannelState
     |
       Finalize
+    | 
+      Wait Integer
     deriving stock (Show, Eq)
     deriving (Data)
 
@@ -83,41 +84,55 @@ instance ContractModel PerunModel where
   -- channel.
   -- Furthermore the `Contract` managing the funds has to know that it holds
   -- the balances for each wallet.
-  nextState (Open wf (_, _) cid balA balB) = do
+  nextState (Open wf (_, _) cid balA balB timelock) = do
     modifyContractState $ \_ ->
       PerunModel
-        ( Just $
-            ChannelState
+        ( Just
+            (ChannelState
               { channelId = cid,
                 balanceA = balA,
                 balanceB = balB,
                 version = 0,
                 final = False
-              }
+              }, timelock)
         )
     -- Move funds from chan -> Contract instance.
     withdraw wf $ Ada.lovelaceValueOf (balA + balB)
     wait 1
   nextState (Update cs) = do
-    modifyContractState $ \_ -> PerunModel . Just $ cs
-  -- Disputing does nothing to the contract state, yet.
-  nextState Dispute {} = return ()
-  -- Closing does nothing to the contract state, yet.
-  nextState (Close (wa, wb) _ _ _ _) = do
+    modifyContractState (\case
+        PerunModel Nothing -> error "Update only works on existing channels"
+        PerunModel (Just (_, tl)) ->  PerunModel . Just $ (cs, tl))
+  -- TODO add disputed bit to PerunModel and handle it here!
+  nextState Dispute {} = do
+    modifyContractState (\case
+        PerunModel Nothing -> error "Dispute only works on existing channels"
+        x -> x)
+    wait 1
+  nextState (Close _ (wa, wb) _ _ _ _) = do
     s <-
       getContractState >>= \case
         PerunModel Nothing -> error "close only works on existing channels"
-        PerunModel (Just s) -> return s
+        PerunModel (Just (s, _)) -> return s
     deposit wa $ Ada.lovelaceValueOf (balanceA s)
     deposit wb $ Ada.lovelaceValueOf (balanceB s)
     wait 1
   -- ForceClosing does nothing to the contract state, yet.
-  nextState ForceClose {} = return ()
+  nextState (ForceClose _ (wa, wb) _)  = do
+    s <-
+      getContractState >>= \case
+        PerunModel Nothing -> error "ForceClose only works on existing channels"
+        PerunModel (Just (s, _)) -> return s
+    deposit wa $ Ada.lovelaceValueOf (balanceA s)
+    deposit wb $ Ada.lovelaceValueOf (balanceB s)
+    wait 1
   nextState Finalize = modifyContractState (\case
-        PerunModel Nothing -> error "close only works on existing channels"
-        PerunModel (Just s) ->  PerunModel . Just $ s{final=True})
+        PerunModel Nothing -> error "Finalize only works on existing channels"
+        PerunModel (Just (s, tl)) ->  PerunModel . Just $ (s{final=True}, tl))
+  nextState (Wait duration) = wait duration
+
   perform handle _ s cmd = case cmd of
-    (Open wf (wa, wb) cid balA balB) -> do
+    (Open wf (wa, wb) cid balA balB timelock) -> do
       Trace.callEndpoint @"open"
         (handle $ Participant wf)
         ( OpenParams
@@ -128,61 +143,44 @@ instance ContractModel PerunModel where
             (mockWalletPaymentPubKeyHash wb)
             balA
             balB
-            30_000_000
+            timelock
         )
       delay 1
     Update {} -> do
       -- Update is an offchain action, so we do not perform any computation
       -- onchain wise.
       return ()
-    Dispute {} -> do
-      return ()
-    (Close (wa, wb) cid balA balB v) -> do
+    (Dispute issuer (wa, wb) _ state) -> do
+      (ska, skb) <- (,) <$> Trace.agentState wa <*> Trace.agentState wb <&> both (unPaymentPrivateKey . Trace.ownPaymentPrivateKey)
+      (pka, pkb) <- (,) <$> Trace.agentState wa <*> Trace.agentState wb <&> both Trace.ownPaymentPublicKey
+      Trace.callEndpoint @"dispute"
+        (handle $ Participant issuer)
+        ( DisputeParams
+            pka
+            pkb
+            (SignedState (signMessage' state ska) (signMessage' state skb))
+        )
+      delay 1
+    (Close issuer (wa, wb) _ _ _ _) -> do
       let cs = s ^. contractState
       chan <- case cs of
         PerunModel Nothing -> Trace.throwError . Trace.GenericError $ "no channel to close"
-        PerunModel (Just chan) -> return chan
+        PerunModel (Just (chan, _)) -> return chan
       (ska, skb) <- (,) <$> Trace.agentState wa <*> Trace.agentState wb <&> both (unPaymentPrivateKey . Trace.ownPaymentPrivateKey)
-      (pka, pkb) <- (,) <$> Trace.agentState wa <*> Trace.agentState wb <&> both (Trace.ownPaymentPublicKey)
+      (pka, pkb) <- (,) <$> Trace.agentState wa <*> Trace.agentState wb <&> both Trace.ownPaymentPublicKey
       Trace.callEndpoint @"close"
-        (handle $ Participant wa)
+        (handle $ Participant issuer)
         ( CloseParams
             pka
             pkb
             (SignedState (signMessage' chan ska) (signMessage' chan skb))
         )
       delay 1
-    ForceClose {} ->
-      return ()
+    (ForceClose issuer (_, _) cID) -> do
+      Trace.callEndpoint @"forceClose"
+        (handle $ Participant issuer)
+        (ForceCloseParams cID)
+      delay 1
     Finalize -> return ()
+    Wait duration -> delay duration
 
--- Testcases
-
--- unitTest example of creating a channel, updating it once and closing.
-unitTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
-unitTest (wa, wb, wf) = do
-  (initBalA, initBalB) <- forAllQ $ both chooseQ ((5_000_000, 20_000_000), (5_000_000, 20_000_000))
-  action $ Open wf (wa, wb) 42069 initBalA initBalB
-
-  modChSt <-
-    getContractState >>= \case
-      PerunModel Nothing -> fail "opening a channel should be tracked in PerunModel"
-      PerunModel (Just cs) -> modifyChannelStateA cs 420
-  action $ Update modChSt
-
-  action $ Finalize
-
-  getContractState >>= \case
-    PerunModel Nothing -> fail "unclosed channel should persist in PerunModel"
-    PerunModel (Just (ChannelState cid ba bb v _)) -> action $ Close (wa, wb) cid ba bb v
-
-
-modifyChannelStateA :: ChannelState -> Integer -> DL PerunModel ChannelState
-modifyChannelStateA cs@(ChannelState _ bA bB v _) delta = do
-  return cs {balanceA = bA - delta, balanceB = bB + delta, version = v + 1}
-
-propPerunDummy :: Actions PerunModel -> Property
-propPerunDummy = propRunActions_
-
-propUnitTest :: Property
-propUnitTest = withMaxSuccess 1 $ forAllDL (unitTest (w1, w2, w3)) propPerunDummy
