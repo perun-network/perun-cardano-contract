@@ -57,6 +57,8 @@ instance ContractModel PerunModel where
       Dispute (Wallet, Wallet) Integer Integer Integer Integer Bool
     | -- | Off-chain action of updating the channelstate.
       Update ChannelState
+    |
+      Finalize
     deriving stock (Show, Eq)
     deriving (Data)
 
@@ -111,7 +113,9 @@ instance ContractModel PerunModel where
     wait 1
   -- ForceClosing does nothing to the contract state, yet.
   nextState ForceClose {} = return ()
-
+  nextState Finalize = modifyContractState (\case
+        PerunModel Nothing -> error "close only works on existing channels"
+        PerunModel (Just s) ->  PerunModel . Just $ s{final=True})
   perform handle _ s cmd = case cmd of
     (Open wf (wa, wb) cid balA balB) -> do
       Trace.callEndpoint @"open"
@@ -150,6 +154,7 @@ instance ContractModel PerunModel where
       delay 1
     ForceClose {} ->
       return ()
+    Finalize -> return ()
 
 -- Testcases
 
@@ -164,6 +169,8 @@ unitTest (wa, wb, wf) = do
       PerunModel Nothing -> fail "opening a channel should be tracked in PerunModel"
       PerunModel (Just cs) -> modifyChannelStateA cs 420
   action $ Update modChSt
+
+  action $ Finalize
 
   getContractState >>= \case
     PerunModel Nothing -> fail "unclosed channel should persist in PerunModel"
