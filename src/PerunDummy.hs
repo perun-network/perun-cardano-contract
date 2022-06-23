@@ -22,6 +22,7 @@
 module PerunDummy
   ( Channel (..),
     ChannelState (..),
+    SignedState (..),
     OpenParams (..),
     DisputeParams (..),
     CloseParams (..),
@@ -60,6 +61,7 @@ import PlutusTx.Prelude hiding (unless)
 import Schema (ToSchema)
 import Text.Printf (printf)
 import qualified Prelude as P
+import qualified Cardano.Api as P
 
 --
 --
@@ -121,13 +123,15 @@ data SignedState = SignedState
   { sigA :: !(SignedMessage ChannelState),
     sigB :: !(SignedMessage ChannelState)
   }
-  deriving (P.Show)
+  deriving (Generic, ToJSON, FromJSON)
+  deriving stock (P.Eq, P.Show)
 
 instance Eq SignedState where
   {-# INLINEABLE (==) #-}
-  b == c =
-    (sigA b == sigA c)
-      && (sigB b == sigB c)
+  (SignedState a b) == (SignedState c d) =
+    (a == c) && (b == d)
+
+
 
 PlutusTx.unstableMakeIsData ''SignedState
 PlutusTx.makeLift ''SignedState
@@ -172,6 +176,16 @@ isValidStateTransition old new =
   (channelId old == channelId new)
     && ((balanceA old + balanceB old) == (balanceA new + balanceB new))
     && (version old < version new)
+
+{-# INLINEABLE extractVerifiedState #-}
+extractVerifiedState :: SignedState -> (PaymentPubKey, PaymentPubKey) -> ChannelState
+extractVerifiedState (SignedState smA smB) (pkA, pkB) = case (verifySignedMessageConstraints' pkA smA, verifySignedMessageConstraints' pkB smB) of
+  (Right (sa, _), Right (sb, _)) -> if sa == sb then sa else traceError "signatures on different states"
+  _ -> traceError "invalid signatures"
+
+{-# INLINEABLE verifySignedMessageConstraints' #-}
+verifySignedMessageConstraints' :: PaymentPubKey -> SignedMessage ChannelState -> Either SignedMessageCheckError (ChannelState, Constraints.TxConstraints () ())
+verifySignedMessageConstraints' = verifySignedMessageConstraints
 
 -- Params:
 --  Datum
@@ -284,14 +298,6 @@ mkChannelValidator cID oldDatum action ctx =
     getPOSIXTimeFromUpperBound (UpperBound (Finite t) _) = t
     getPOSIXTimeFromUpperBound _ = traceError "unable to verify time"
 
-    extractVerifiedState :: SignedState -> (PaymentPubKey, PaymentPubKey) -> ChannelState
-    extractVerifiedState (SignedState smA smB) (pkA, pkB) = case (verifySignedMessageConstraints' pkA smA, verifySignedMessageConstraints' pkB smB) of
-      (Right (sa, _), Right (sb, _)) -> if sa == sb then sa else traceError "signatures on different states"
-      _ -> traceError "invalid signatures"
-
-    verifySignedMessageConstraints' :: PaymentPubKey -> SignedMessage ChannelState -> Either SignedMessageCheckError (ChannelState, Constraints.TxConstraints () ())
-    verifySignedMessageConstraints' = verifySignedMessageConstraints
-
     allowedValidRangeSize :: Bool
     allowedValidRangeSize = (getPOSIXEndTime (strictUpperBound (txInfoValidRange info)) - getPOSIXStartTime (strictLowerBound (txInfoValidRange info))) <= defaultValidMsRange
 
@@ -371,13 +377,9 @@ data DisputeParams = DisputeParams
   deriving stock (P.Eq, P.Show)
 
 data CloseParams = CloseParams
-  { cpChannelId :: !ChannelID,
-    cpBalanceA :: !Integer,
-    cpBalanceB :: !Integer,
-    cpVersion :: !Integer,
-    cpFinal :: !Bool,
-    cpSigA :: !(SignedMessage ChannelState),
-    cpSigB :: !(SignedMessage ChannelState)
+  { cpSigningPKA :: !PaymentPubKey,
+    cpSigningPKB :: !PaymentPubKey,
+    cpSignedState :: !SignedState
   }
   deriving (Generic, ToJSON, FromJSON)
   deriving stock (P.Eq, P.Show)
@@ -480,34 +482,32 @@ dispute DisputeParams {..} = do
 --
 
 close :: forall w s. CloseParams -> Contract w s Text ()
-close CloseParams {..} = do
-  (oref, o, d@ChannelDatum {..}) <- findChannel cpChannelId
+close (CloseParams pKA pKB sst@SignedState {..}) = do
+  let
+    ChannelState{..} = extractVerifiedState sst (pKA, pKB)
+  (oref, o, d@ChannelDatum {..}) <- findChannel channelId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
-  unless cpFinal $
+  unless final $
     throwError $ pack $ printf "can not close unless state is final"
-  let cls =
-        SignedState
-          { sigA = cpSigA,
-            sigB = cpSigB
-          }
-      r = Redeemer $ PlutusTx.toBuiltinData $ MkClose cls
-      lookups =
-        Constraints.typedValidatorLookups (typedChannelValidator cpChannelId)
-          P.<> Constraints.otherScript (channelValidator cpChannelId)
-          P.<> Constraints.unspentOutputs (Map.singleton oref o)
-      tx =
-        Constraints.mustPayToPubKey (pPaymentPKA channelParameters) (Ada.lovelaceValueOf cpBalanceA)
-          <> Constraints.mustPayToPubKey (pPaymentPKB channelParameters) (Ada.lovelaceValueOf cpBalanceB)
-          <> Constraints.mustSpendScriptOutput oref r
+  let 
+    r = Redeemer $ PlutusTx.toBuiltinData $ MkClose sst
+    lookups =
+      Constraints.typedValidatorLookups (typedChannelValidator channelId)
+        P.<> Constraints.otherScript (channelValidator channelId)
+        P.<> Constraints.unspentOutputs (Map.singleton oref o)
+    tx =
+      Constraints.mustPayToPubKey (pPaymentPKA channelParameters) (Ada.lovelaceValueOf balanceA)
+        <> Constraints.mustPayToPubKey (pPaymentPKB channelParameters) (Ada.lovelaceValueOf balanceB)
+        <> Constraints.mustSpendScriptOutput oref r
   ledgerTx <- submitTxConstraintsWith lookups tx
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $
     printf
       "closed channel %d with params %s. The final balance is: (%d, %d)"
-      cpChannelId
+      channelId
       (P.show channelParameters)
-      cpBalanceA
-      cpBalanceB
+      balanceA
+      balanceB
 
 --
 -- close logic

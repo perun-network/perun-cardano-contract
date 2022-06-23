@@ -24,6 +24,7 @@ import Plutus.Contract.Oracle
 import Plutus.Contract.Test (Wallet, mockWalletPaymentPubKey, mockWalletPaymentPubKeyHash, w1, w2, w3)
 import Plutus.Contract.Test.ContractModel
 import qualified Plutus.Trace.Emulator as Trace
+import qualified Wallet.Emulator.Wallet as Trace
 import Test.QuickCheck as QC hiding (checkCoverage, (.&&.))
 
 wallets :: [Wallet]
@@ -137,18 +138,14 @@ instance ContractModel PerunModel where
       chan <- case cs of
         PerunModel Nothing -> Trace.throwError . Trace.GenericError $ "no channel to close"
         PerunModel (Just chan) -> return chan
-      (pa, pb) <- (,) <$> Trace.agentState wa <*> Trace.agentState wb <&> both (unPaymentPrivateKey . Trace.ownPaymentPrivateKey)
-
+      (ska, skb) <- (,) <$> Trace.agentState wa <*> Trace.agentState wb <&> both (unPaymentPrivateKey . Trace.ownPaymentPrivateKey)
+      (pka, pkb) <- (,) <$> Trace.agentState wa <*> Trace.agentState wb <&> both (Trace.ownPaymentPublicKey)
       Trace.callEndpoint @"close"
         (handle $ Participant wa)
         ( CloseParams
-            cid
-            balA
-            balB
-            v
-            True
-            (signMessage' chan pa)
-            (signMessage' chan pb)
+            pka
+            pkb
+            (SignedState (signMessage' chan ska) (signMessage' chan skb))
         )
       delay 1
     ForceClose {} ->
