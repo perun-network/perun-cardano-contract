@@ -53,11 +53,8 @@ import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
 import qualified Ledger.Typed.Scripts as Scripts
 import Playground.Contract (ensureKnownCurrencies, printJson, printSchemas, stage)
-import Playground.TH (mkKnownCurrencies, mkSchemaDefinitions)
-import Playground.Types (KnownCurrency (..))
 import Plutus.Contract
-import Plutus.Contract.Oracle (SignedMessage (..), SignedMessageCheckError (..), signMessage', verifySignedMessageOnChain)
-import Plutus.V1.Ledger.Api (Credential (PubKeyCredential), LedgerBytes (LedgerBytes), StakingCredential (StakingHash), fromBytes)
+import Plutus.Contract.Oracle (SignedMessage (..), SignedMessageCheckError (..), verifySignedMessageConstraints)
 import qualified PlutusTx
 import PlutusTx.Prelude hiding (unless)
 import Schema (ToSchema)
@@ -72,11 +69,8 @@ import qualified Prelude as P
 
 type ChannelID = Integer
 
---validMsDifference :: Integer
---validMsDifference = 10000
---
 defaultValidMsRange :: POSIXTime
-defaultValidMsRange = 10000 :: POSIXTime
+defaultValidMsRange = 10000
 
 -- Parameters of the channel
 data Channel = Channel
@@ -124,8 +118,7 @@ PlutusTx.unstableMakeIsData ''ChannelState
 PlutusTx.makeLift ''ChannelState
 
 data SignedState = SignedState
-  { newState :: !ChannelState,
-    sigA :: !(SignedMessage ChannelState),
+  { sigA :: !(SignedMessage ChannelState),
     sigB :: !(SignedMessage ChannelState)
   }
   deriving (P.Show)
@@ -133,8 +126,7 @@ data SignedState = SignedState
 instance Eq SignedState where
   {-# INLINEABLE (==) #-}
   b == c =
-    (newState b == newState c)
-      && (sigA b == sigA c)
+    (sigA b == sigA c)
       && (sigB b == sigB c)
 
 PlutusTx.unstableMakeIsData ''SignedState
@@ -181,22 +173,6 @@ isValidStateTransition old new =
     && ((balanceA old + balanceB old) == (balanceA new + balanceB new))
     && (version old < version new)
 
--- Onchain signature verification.
---verifyOnChain :: BuiltinByteString -> BuiltinByteString -> BuiltinByteString -> Bool
---verifyOnChain = verifySignature
-
---
--- There is also:
--- signMessage
---    :: ToData a =>
---        a
---        -> PaymentPrivateKey
---        -> Passphrase
---        -> SignedMessage a
---
--- signMessage' == signMessage without `PassPhrase`. All that has to be done is
--- to define a `ToData` and `FromData` instance for whatever has to be signed.
-
 -- Params:
 --  Datum
 --  Redeemer
@@ -209,77 +185,48 @@ mkChannelValidator cID oldDatum action ctx =
   traceIfFalse "wrong input value" correctInputValue
     && case action of
       -- Dispute Case:
-      MkDispute SignedState {..} ->
-        -- check that the state transition is valid
-        traceIfFalse "invalid state transition" (isValidStateTransition oldState (state outputDatum))
-          &&
-          -- check that the channel id in the state in the dispute matches the actual channel id
-          traceIfFalse "state in dispute does not belong to this channel" (channelId (state outputDatum) == cID)
-          &&
-          -- check that the state in the dispute is reflected in the output datum
-          traceIfFalse "output state does not match the state in the dispute" (newState == state outputDatum)
-          &&
-          -- check that the channel funding is maintained. This also checks the integrity of the channel script
-          traceIfFalse "wrong output value" correctChannelFunding
-          &&
-          -- check that the channel parameters stay the same
-          traceIfFalse "channel parameters differ" (channelParameters oldDatum == channelParameters outputDatum)
-          &&
-          -- check that the time in the output datum is set properly
-          traceIfFalse "invalid time in output datum" (allowedValidRangeSize && outputTimeInValidRange)
-          &&
-          -- check that the channel is marked as disputed
-          traceIfFalse "failed to mark channel as disputed" (disputed outputDatum)
-          &&
-          -- check that A's supplied key is correct
-          -- traceIfFalse "A's supplied keys do not match their key in the channel parameters" (verifyKeysMatch keyA (pPartyA (channelParameters oldDatum)))
-          -- &&
-          -- check that B's supplied key is correct
-          -- traceIfFalse "B's supplied keys do not match their key in the channel parameters" (verifyKeysMatch keyB (pPartyB (channelParameters oldDatum)))
-          -- &&
-          -- check that A's signature on the new state is valid
-          traceIfFalse "A's signed state does not match the state in the dispute" (getStateFromValidSignature (pSigningPKA (channelParameters oldDatum)) sigA == newState)
-          &&
-          -- check that B's signature on the new state is valid
-          traceIfFalse "B's signed state does not match the state in the dispute" (getStateFromValidSignature (pSigningPKB (channelParameters oldDatum)) sigB == newState)
-      -- Close Case
-      MkClose SignedState {..} ->
-        --
-        traceIfFalse "Closing state does not belong to this channel" (cID == channelId newState)
-          &&
-          -- check that A's supplied key is correct
-          --traceIfFalse "A's supplied keys do not match their key in the channel parameters" (verifyKeysMatch keyA (pPartyA (channelParameters oldDatum)))
-          -- &&
-          -- check that B's supplied key is correct
-          --traceIfFalse "B's supplied keys do not match their key in the channel parameters" (verifyKeysMatch keyB (pPartyB (channelParameters oldDatum)))
-          -- &&
-          -- check that A's signature on the new state is valid
-          traceIfFalse "A's signed state does not match the state in the dispute" (getStateFromValidSignature (pSigningPKA (channelParameters oldDatum)) sigA == newState)
-          &&
-          -- check that B's signature on the new state is valid
-          traceIfFalse "B's signed state does not match the state in the dispute" (getStateFromValidSignature (pSigningPKB (channelParameters oldDatum)) sigB == newState)
-          &&
-          -- check that the state is final
-          traceIfFalse "The closing state is not final" (final newState)
-          &&
-          -- check that A receives their balance
-          traceIfFalse "Party A did not get their balance" (getsValue (pPaymentPKA (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceA newState))
-          &&
-          -- check that B receives their balance
-          traceIfFalse "Party B did not get their balance" (getsValue (pPaymentPKB (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceB newState))
-      -- ForceClose Case
+      MkDispute st ->
+        let newState = extractVerifiedState st (pSigningPKA (channelParameters oldDatum), pSigningPKB (channelParameters oldDatum))
+         in and
+              [ -- check that the state in the dispute is reflected in the output datum
+                traceIfFalse "output state does not match the state in the dispute" (newState == state outputDatum),
+                -- check that the state transition is valid
+                traceIfFalse "invalid state transition" (isValidStateTransition oldState (state outputDatum)),
+                -- check that the channel id in the state in the dispute matches the actual channel id
+                traceIfFalse "state in dispute does not belong to this channel" (channelId (state outputDatum) == cID),
+                -- check that the channel funding is maintained. This also checks the integrity of the channel script
+                traceIfFalse "wrong output value" correctChannelFunding,
+                -- check that the channel parameters stay the same
+                traceIfFalse "channel parameters differ" (channelParameters oldDatum == channelParameters outputDatum),
+                -- check that the time in the output datum is set properly
+                traceIfFalse "invalid time in output datum" (allowedValidRangeSize && outputTimeInValidRange),
+                -- check that the channel is marked as disputed
+                traceIfFalse "failed to mark channel as disputed" (disputed outputDatum)
+              ]
+      -- Close Case:
+      MkClose st ->
+        let newState = extractVerifiedState st (pSigningPKA (channelParameters oldDatum), pSigningPKB (channelParameters oldDatum))
+         in and
+              [ traceIfFalse "Closing state does not belong to this channel" (cID == channelId newState),
+                -- check that the state is final
+                traceIfFalse "The closing state is not final" (final newState),
+                -- check that A receives their balance
+                traceIfFalse "Party A did not get their balance" (getsValue (pPaymentPKA (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceA newState)),
+                -- check that B receives their balance
+                traceIfFalse "Party B did not get their balance" (getsValue (pPaymentPKB (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceB newState))
+              ]
+      -- ForceClose Case:
       ForceClose ->
-        -- check that there was a prior dispute
-        traceIfFalse "try to force close without prior dispute" (disputed oldDatum)
-          &&
-          -- check that the relative time-lock is past
-          traceIfFalse "too early" correctForceCloseSlotRange
-          &&
-          -- check that Party A receives their balance
-          traceIfFalse "Party A did not get their balance" (getsValue (pPaymentPKA (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceA oldState))
-          &&
-          -- check that Party B receives their balance
-          traceIfFalse "Party B did not get their balance" (getsValue (pPaymentPKB (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceB oldState))
+        and
+          [ -- check that there was a prior dispute
+            traceIfFalse "try to force close without prior dispute" (disputed oldDatum),
+            -- check that the relative time-lock is past
+            traceIfFalse "too early" correctForceCloseSlotRange,
+            -- check that Party A receives their balance
+            traceIfFalse "Party A did not get their balance" (getsValue (pPaymentPKA (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceA oldState)),
+            -- check that Party B receives their balance
+            traceIfFalse "Party B did not get their balance" (getsValue (pPaymentPKB (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceB oldState))
+          ]
   where
     --- The out-scripts view of the transaction body of the consuming transaction
     info :: TxInfo
@@ -337,18 +284,13 @@ mkChannelValidator cID oldDatum action ctx =
     getPOSIXTimeFromUpperBound (UpperBound (Finite t) _) = t
     getPOSIXTimeFromUpperBound _ = traceError "unable to verify time"
 
-    getStateFromValidSignature :: PaymentPubKey -> SignedMessage ChannelState -> ChannelState
-    getStateFromValidSignature key sm =
-      let x = verifySignedMessageOnChain ctx key sm
-       in case x of
-            Left SignatureMismatch {} -> traceError "Signedstate error: SignatureMismatch on signed state"
-            Left DatumMissing {} -> traceError "Signedstate error: Missing datum in tx"
-            Left DecodingError -> traceError "Signedstate error: Malformed Datum"
-            Left DatumNotEqualToExpected -> traceError "SignedState error: Datum not according to hash"
-            Right state -> state
+    extractVerifiedState :: SignedState -> (PaymentPubKey, PaymentPubKey) -> ChannelState
+    extractVerifiedState (SignedState smA smB) (pkA, pkB) = case (verifySignedMessageConstraints' pkA smA, verifySignedMessageConstraints' pkB smB) of
+      (Right (sa, _), Right (sb, _)) -> if sa == sb then sa else traceError "signatures on different states"
+      _ -> traceError "invalid signatures"
 
-    --verifyKeysMatch :: PaymentPubKey -> PaymentPubKeyHash -> Bool
-    --verifyKeysMatch pk pkh = paymentPubKeyHash pk == pkh
+    verifySignedMessageConstraints' :: PaymentPubKey -> SignedMessage ChannelState -> Either SignedMessageCheckError (ChannelState, Constraints.TxConstraints () ())
+    verifySignedMessageConstraints' = verifySignedMessageConstraints
 
     allowedValidRangeSize :: Bool
     allowedValidRangeSize = (getPOSIXEndTime (strictUpperBound (txInfoValidRange info)) - getPOSIXStartTime (strictLowerBound (txInfoValidRange info))) <= defaultValidMsRange
@@ -369,11 +311,8 @@ mkChannelValidator cID oldDatum action ctx =
               | o' <- txInfoOutputs info,
                 txOutValue o' == v
             ]
-       in -- inlined code from Ledger.Address pubKeyAddress :: PaymentPubKey -> Maybe StakePubKeyHash-> Address
-          -- then switched (pubKeyHash key) to dummy -> then it compiles why tho?!?!?
-          txOutAddress o == pubKeyHashAddress pkh Nothing
+       in txOutAddress o == pubKeyHashAddress pkh Nothing
 
---
 --
 -- COMPILATION TO PLUTUS CORE
 --
@@ -512,8 +451,7 @@ dispute DisputeParams {..} = do
           }
       disp =
         SignedState
-          { newState = s,
-            sigA = dpSigA,
+          { sigA = dpSigA,
             sigB = dpSigB
           }
       newDatum =
@@ -547,18 +485,9 @@ close CloseParams {..} = do
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   unless cpFinal $
     throwError $ pack $ printf "can not close unless state is final"
-  let s =
-        ChannelState
-          { channelId = cpChannelId,
-            balanceA = cpBalanceA,
-            balanceB = cpBalanceB,
-            version = cpVersion,
-            final = cpFinal
-          }
-      cls =
+  let cls =
         SignedState
-          { newState = s,
-            sigA = cpSigA,
+          { sigA = cpSigA,
             sigB = cpSigB
           }
       r = Redeemer $ PlutusTx.toBuiltinData $ MkClose cls
@@ -637,7 +566,3 @@ contract = selectList [open', dispute', close', forceClose'] >> contract
     dispute' = endpoint @"dispute" dispute
     close' = endpoint @"close" close
     forceClose' = endpoint @"forceClose" forceClose
-
--- TODO this is a helper just for testing, move this appropriately
-signState :: PrivateKey -> PrivateKey -> ChannelState -> SignedState
-signState keyA keyB state = SignedState {newState = state, sigA = signMessage' state keyA, sigB = signMessage' state keyB}
