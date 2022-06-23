@@ -58,7 +58,7 @@ instance ContractModel PerunModel where
       Update ChannelState
     |
       Finalize
-    | 
+    |
       Wait Integer
     deriving stock (Show, Eq)
     deriving (Data)
