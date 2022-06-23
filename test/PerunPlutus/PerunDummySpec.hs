@@ -54,7 +54,6 @@ instance ContractModel PerunModel where
       ForceClose Wallet Integer
     | -- | Disputing -> ChannelID -> BalanceA -> BalanceB -> Version -> Final.
       Dispute (Wallet, Wallet) Integer Integer Integer Integer Bool
-    | Withdraw Wallet Integer
     | -- | Off-chain action of updating the channelstate.
       Update ChannelState
     deriving stock (Show, Eq)
@@ -98,17 +97,19 @@ instance ContractModel PerunModel where
     wait 1
   nextState (Update cs) = do
     modifyContractState $ \_ -> PerunModel . Just $ cs
-    wait 1
   -- Disputing does nothing to the contract state, yet.
   nextState Dispute {} = return ()
   -- Closing does nothing to the contract state, yet.
-  nextState Close {} = do
+  nextState (Close (wa, wb) _ _ _ _) = do
+    s <-
+      getContractState >>= \case
+        PerunModel Nothing -> error "close only works on existing channels"
+        PerunModel (Just s) -> return s
+    deposit wa $ Ada.lovelaceValueOf (balanceA s)
+    deposit wb $ Ada.lovelaceValueOf (balanceB s)
     wait 1
   -- ForceClosing does nothing to the contract state, yet.
   nextState ForceClose {} = return ()
-  -- A wallet `w` withdrawing removes funds which were deposited from the
-  -- contract.
-  nextState (Withdraw w a) = deposit w $ Ada.lovelaceValueOf a
 
   perform handle _ s cmd = case cmd of
     (Open wf (wa, wb) cid balA balB) -> do
@@ -152,18 +153,6 @@ instance ContractModel PerunModel where
       delay 1
     ForceClose {} ->
       return ()
-    (Withdraw _ _) -> do
-      -- TODO:
-      -- Understand the semantics for `perform` vs `nextState`.
-      -- `nextState` progresses the tests statemachine, updating the
-      -- `PerunModel`, while `perform` is mainly used to call
-      -- `ContractEndpoint`s.
-      -- It does not seem like it is intended, since updating a wallets state
-      -- at this point is overly complicated.
-      -- Withdrawing might need an implementation where the tokens are claimed
-      -- by the users. But I am not sure, so we leave it be until we realize
-      -- the testcase will fail.
-      return ()
 
 -- Testcases
 
@@ -182,6 +171,7 @@ unitTest (wa, wb, wf) = do
   getContractState >>= \case
     PerunModel Nothing -> fail "unclosed channel should persist in PerunModel"
     PerunModel (Just (ChannelState cid ba bb v _)) -> action $ Close (wa, wb) cid ba bb v
+
 
 modifyChannelStateA :: ChannelState -> Integer -> DL PerunModel ChannelState
 modifyChannelStateA cs@(ChannelState _ bA bB v _) delta = do
