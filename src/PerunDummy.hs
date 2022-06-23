@@ -440,7 +440,7 @@ dispute (DisputeParams pKA pKB sst@SignedState {..}) = do
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   unless (isValidStateTransition state dState) $
     throwError $ pack $ printf "state transition in dispute invalid"
-  let 
+  let
       newDatum =
         d
           { state = dState,
@@ -469,9 +469,11 @@ dispute (DisputeParams pKA pKB sst@SignedState {..}) = do
 close :: forall w s. CloseParams -> Contract w s Text ()
 close (CloseParams pKA pKB sst@SignedState {..}) = do
   let
-    ChannelState{..} = extractVerifiedState sst (pKA, pKB)
+    s@ChannelState{..} = extractVerifiedState sst (pKA, pKB)
   (oref, o, d@ChannelDatum {..}) <- findChannel channelId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
+  unless (isValidStateTransition state s) $ 
+    throwError $ pack $ printf "state transition invalid"
   unless final $
     throwError $ pack $ printf "can not close unless state is final"
   let
