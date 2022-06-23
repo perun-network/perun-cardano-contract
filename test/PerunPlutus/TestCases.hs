@@ -1,9 +1,10 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NumericUnderscores #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 
-module PerunPlutus.TestCases where
+module PerunPlutus.TestCases (runPerunDummyTests) where
 
 import Data.Functor ((<&>))
 import Data.Tuple.Extra (both)
@@ -70,15 +71,32 @@ maliciousDisputeTest (wa, wb, wf) = do
   channelID <- forAllQ $ arbitraryQ @Integer
   (initBalA, initBalB) <- forAllQ $ both chooseQ ((initBalLB, initBalUB), (initBalLB, initBalUB))
   action $ Open wf (wa, wb) channelID initBalA initBalB defaultTimeLock
-  updates <- genChainedChannelUpdates 20
-  action `mapM` map Update updates
-  action `mapM` zipWith (\w update -> Dispute w (wa, wb) channelID update) [wa, wb] updates
+  firstUpdate <-
+    requireGetChannel "channel must be available after opening"
+      >>= ( \(cs, _) ->
+              forAllQ (chooseQ (0, initBalLB `div` 2))
+                >>= aPaysB cs
+          )
+  action $ Update firstUpdate
+  secondUpdate <-
+    requireGetChannel "channel must be available after opening"
+      >>= ( \(cs, _) ->
+              forAllQ (chooseQ (0, initBalLB `div` 2))
+                >>= aPaysB cs
+          )
+  action $ Update secondUpdate
+
+  action $ Dispute wa (wa, wb) channelID firstUpdate
+  action $ Dispute wb (wa, wb) channelID secondUpdate
+
   action $ Wait 16
   action $ ForceClose wb (wa, wb) channelID
 
 -- | genChainedChannelUpdates generates `n` successive channel updates on the
 -- | channel contained in `PerunModel`.
 -- | It generates valid updates as long as `n <= initBalLB`.
+-- | NOTE: Something is weird when executing actions using `mapM/mapM_`, which
+-- | is necessary to make proper use of this function.
 genChainedChannelUpdates :: Integer -> DL PerunModel [ChannelState]
 genChainedChannelUpdates n =
   mapM
@@ -95,13 +113,21 @@ aPaysB :: ChannelState -> Integer -> DL PerunModel ChannelState
 aPaysB cs@(ChannelState _ bA bB v _) delta =
   return cs {balanceA = bA - delta, balanceB = bB + delta, version = v + 1}
 
-bPaysA :: ChannelState -> Integer -> DL PerunModel ChannelState
-bPaysA cs@(ChannelState _ bA bB v _) delta =
-  return cs {balanceA = bA + delta, balanceB = bB - delta, version = v + 1}
-
 propPerunDummy :: Actions PerunModel -> Property
 propPerunDummy = propRunActions_
 
--- TODO find a way to actually run *all* unit tests
-propUnitTest :: Property
-propUnitTest = withMaxSuccess 1 $ forAllDL (maliciousDisputeTest (w1, w2, w3)) propPerunDummy
+prop_HonestPaymentTest :: Property
+prop_HonestPaymentTest = withMaxSuccess 1 $ forAllDL (honestPaymentTest (w1, w2, w3)) propPerunDummy
+
+prop_SingleDisputeTest :: Property
+prop_SingleDisputeTest = withMaxSuccess 1 $ forAllDL (singleDisputeTest (w1, w2, w3)) propPerunDummy
+
+prop_MaliciousDisputeTest :: Property
+prop_MaliciousDisputeTest = withMaxSuccess 1 $ forAllDL (maliciousDisputeTest (w1, w2, w3)) propPerunDummy
+
+return [] -- <- Needed for TemplateHaskell to do some magic and find the property tests.
+
+-- NOTE: Automatically discovered Properties are functions of type `Property`
+-- having a `prop_` prefix!
+runPerunDummyTests :: IO Bool
+runPerunDummyTests = $quickCheckAll
