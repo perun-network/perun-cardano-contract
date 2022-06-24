@@ -162,20 +162,21 @@ instance Scripts.ValidatorTypes ChannelTypes where
   type RedeemerType ChannelTypes = ChannelAction
   type DatumType ChannelTypes = ChannelDatum
 
--- Params:
---      old state :: ChannelState
---      new state :: ChannelState
--- Returns:
---      True, iff the transition from the old state to the new state is valid,
---      i.e. the channelId ist the same, the sum of the balances is the same
---      and the version number strictly increases
+-- | Returns true, iff the new state is a valid post-state of the old channel state.
+-- | A valid state transition must retain the channelId and the sum of the balances.
+-- | The new version number must be greater than the old version number and there is
+-- | no valid transition from a final state.
 {-# INLINEABLE isValidStateTransition #-}
 isValidStateTransition :: ChannelState -> ChannelState -> Bool
 isValidStateTransition old new =
   (channelId old == channelId new)
     && ((balanceA old + balanceB old) == (balanceA new + balanceB new))
     && (version old < version new)
+    && not (final old)
 
+-- | Checks all signatures on the given SignedState under the given public keys
+-- | and returns the corresponding ChannelState if all signatures are valid on 
+-- | the same ChannelState.
 {-# INLINEABLE extractVerifiedState #-}
 extractVerifiedState :: SignedState -> (PaymentPubKey, PaymentPubKey) -> ChannelState
 extractVerifiedState (SignedState smA smB) (pkA, pkB) = case (verifySignedMessageConstraints' pkA smA, verifySignedMessageConstraints' pkB smB) of
@@ -241,7 +242,7 @@ mkChannelValidator cID oldDatum action ctx =
             traceIfFalse "Party B did not get their balance" (getsValue (pPaymentPKB (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceB oldState))
           ]
   where
-    --- The out-scripts view of the transaction body of the consuming transaction
+    -- | The out-scripts view of the transaction body of the consuming transaction
     info :: TxInfo
     info = scriptContextTxInfo ctx
 
@@ -276,7 +277,7 @@ mkChannelValidator cID oldDatum action ctx =
             Nothing -> traceError "error decoding data"
       _ -> traceError "expected exactly one continuing output"
 
-    --- Check that the output of the bidding transaction maintains the channel funding
+    -- | Check that the output of the bidding transaction maintains the channel funding
     correctChannelFunding :: Bool
     correctChannelFunding =
       txOutValue ownOutput == Ada.lovelaceValueOf (balanceA oldState + balanceB oldState)
@@ -297,14 +298,15 @@ mkChannelValidator cID oldDatum action ctx =
     getPOSIXTimeFromUpperBound (UpperBound (Finite t) _) = t
     getPOSIXTimeFromUpperBound _ = traceError "unable to verify time"
 
+    -- | Check that the consuming transaction is valid in an interval of at most `defaultValidMsRange` milliseconds
     allowedValidRangeSize :: Bool
     allowedValidRangeSize = (getPOSIXEndTime (strictUpperBound (txInfoValidRange info)) - getPOSIXStartTime (strictLowerBound (txInfoValidRange info))) <= defaultValidMsRange
 
-    -- Check that the time in the output datum of the consuming transaction is located inside the valid range of the consuming transaction
+    -- | Check that the time in the output datum of the consuming transaction is located inside the valid range of the consuming transaction
     outputTimeInValidRange :: Bool
     outputTimeInValidRange = Ledger.member (time outputDatum) (txInfoValidRange info)
 
-    -- Check that the relative time-lock has passed
+    -- | Check that the relative time-lock has passed
     correctForceCloseSlotRange :: Bool
     correctForceCloseSlotRange = from (time oldDatum + fromMilliSeconds (DiffMilliSeconds (pTimeLock (channelParameters oldDatum)))) `contains` txInfoValidRange info
 
@@ -432,7 +434,7 @@ open OpenParams {..} = do
 --
 
 dispute :: forall w s. DisputeParams -> Contract w s Text ()
-dispute (DisputeParams pKA pKB sst@SignedState {..}) = do
+dispute (DisputeParams pKA pKB sst) = do
   let
     dState = extractVerifiedState sst (pKA, pKB)
   t <- currentTime
@@ -467,7 +469,7 @@ dispute (DisputeParams pKA pKB sst@SignedState {..}) = do
 --
 
 close :: forall w s. CloseParams -> Contract w s Text ()
-close (CloseParams pKA pKB sst@SignedState {..}) = do
+close (CloseParams pKA pKB sst) = do
   let
     s@ChannelState{..} = extractVerifiedState sst (pKA, pKB)
   (oref, o, d@ChannelDatum {..}) <- findChannel channelId
