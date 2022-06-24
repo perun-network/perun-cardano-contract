@@ -1,8 +1,6 @@
-{-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TypeApplications #-}
 
 module PerunPlutus.TestCases (runPerunDummyTests) where
 
@@ -27,10 +25,10 @@ defaultTimeLock :: Integer
 defaultTimeLock = 15_000
 
 -- | honestPaymentTest tests the happy path where two parties open a channel,
--- | update it once and close if afterwards.
+-- | update it once and close it afterwards.
 honestPaymentTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 honestPaymentTest (wa, wb, wf) = do
-  channelID <- forAllQ $ arbitraryQ @Integer
+  channelID <- forAllQ arbitraryQ
   (initBalA, initBalB) <- forAllQ $ both chooseQ ((initBalLB, initBalUB), (initBalLB, initBalUB))
   action $ Open wf (wa, wb) channelID initBalA initBalB defaultTimeLock
   modChSt <-
@@ -44,7 +42,7 @@ honestPaymentTest (wa, wb, wf) = do
 
 singleDisputeTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 singleDisputeTest (wa, wb, wf) = do
-  channelID <- forAllQ $ arbitraryQ @Integer
+  channelID <- forAllQ arbitraryQ
   (initBalA, initBalB) <- forAllQ $ both chooseQ ((initBalLB, initBalUB), (initBalLB, initBalUB))
   action $ Open wf (wa, wb) channelID initBalA initBalB defaultTimeLock
 
@@ -68,7 +66,7 @@ requireWithChannel msg f = requireGetChannel msg >>= f
 
 maliciousDisputeTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 maliciousDisputeTest (wa, wb, wf) = do
-  channelID <- forAllQ $ arbitraryQ @Integer
+  channelID <- forAllQ arbitraryQ
   (initBalA, initBalB) <- forAllQ $ both chooseQ ((initBalLB, initBalUB), (initBalLB, initBalUB))
   action $ Open wf (wa, wb) channelID initBalA initBalB defaultTimeLock
   firstUpdate <-
@@ -127,7 +125,7 @@ prop_MaliciousDisputeTest = withMaxSuccess 1 $ forAllDL (maliciousDisputeTest (w
 
 return [] -- <- Needed for TemplateHaskell to do some magic and find the property tests.
 
--- NOTE: Automatically discovered Properties are functions of type `Property`
+-- NOTE: Automatically discovered properties are functions of type `Property`
 -- having a `prop_` prefix!
 runPerunDummyTests :: IO Bool
 runPerunDummyTests = $quickCheckAll
