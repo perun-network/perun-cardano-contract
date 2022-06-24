@@ -1,94 +1,131 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NumericUnderscores #-}
-module PerunPlutus.TestCases where
-import Plutus.Contract.Test
-import PerunPlutus.PerunDummySpec
-import Plutus.Contract.Test.ContractModel
-import PerunDummy
-import Test.QuickCheck
+{-# LANGUAGE TemplateHaskell #-}
+
+module PerunPlutus.TestCases (runPerunDummyTests) where
+
+import Data.Functor ((<&>))
 import Data.Tuple.Extra (both)
+import PerunDummy
+import PerunPlutus.PerunDummySpec
+import Plutus.Contract.Test
+import Plutus.Contract.Test.ContractModel
+import Test.QuickCheck
 
 -- Testcases
 
--- unitTest example of creating a channel, updating it once and closing.
+-- Testconfiguration
+initBalLB :: Integer
+initBalLB = 5_000_000
+
+initBalUB :: Integer
+initBalUB = 5 * initBalLB
+
+defaultTimeLock :: Integer
+defaultTimeLock = 15_000
+
+-- | honestPaymentTest tests the happy path where two parties open a channel,
+-- | update it once and close it afterwards.
 honestPaymentTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 honestPaymentTest (wa, wb, wf) = do
-  (initBalA, initBalB) <- forAllQ $ both chooseQ ((5_000_000, 20_000_000), (5_000_000, 20_000_000))
-  action $ Open wf (wa, wb) 42069 initBalA initBalB 15000
-
+  channelID <- forAllQ arbitraryQ
+  (initBalA, initBalB) <- forAllQ $ both chooseQ ((initBalLB, initBalUB), (initBalLB, initBalUB))
+  action $ Open wf (wa, wb) channelID initBalA initBalB defaultTimeLock
   modChSt <-
-    getContractState >>= \case
-      PerunModel Nothing -> fail "opening a channel should be tracked in PerunModel"
-      PerunModel (Just (cs, _)) -> aPaysB cs 420
+    requireWithChannel
+      "channel must be available after opening"
+      (\(cs, _) -> forAllQ (chooseQ (0, initBalLB)) >>= aPaysB cs)
   action $ Update modChSt
-
   action Finalize
-
-  getContractState >>= \case
-    PerunModel Nothing -> fail "unclosed channel should persist in PerunModel"
-    PerunModel (Just (ChannelState cid ba bb v _, _)) -> action $ Close wb (wa, wb) cid ba bb v
+  ChannelState cid ba bb v _ <- requireGetChannel "channel must be available after finalization" <&> fst
+  action $ Close wb (wa, wb) cid ba bb v
 
 singleDisputeTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 singleDisputeTest (wa, wb, wf) = do
-  (initBalA, initBalB) <- forAllQ $ both chooseQ ((5_000_000, 20_000_000), (5_000_000, 20_000_000))
-  action $ Open wf (wa, wb) 42069 initBalA initBalB 15000
+  channelID <- forAllQ arbitraryQ
+  (initBalA, initBalB) <- forAllQ $ both chooseQ ((initBalLB, initBalUB), (initBalLB, initBalUB))
+  action $ Open wf (wa, wb) channelID initBalA initBalB defaultTimeLock
 
   modChSt <-
-    getContractState >>= \case
-      PerunModel Nothing -> fail "opening a channel should be tracked in PerunModel"
-      PerunModel (Just (cs, _)) -> aPaysB cs 420
+    requireWithChannel
+      "channel must be available after opening"
+      (\(cs, _) -> forAllQ (chooseQ (0, initBalLB)) >>= aPaysB cs)
   action $ Update modChSt
-
-  getContractState >>= \case
-    PerunModel Nothing -> fail "unclosed channel should persist in PerunModel"
-    PerunModel (Just _) -> action $ Dispute wb (wa, wb) 42069 modChSt
+  action $ Dispute wb (wa, wb) channelID modChSt
   action $ Wait 16
+  action $ ForceClose wb (wa, wb) channelID
 
-
+requireGetChannel :: String -> DL PerunModel (ChannelState, Integer)
+requireGetChannel msg =
   getContractState >>= \case
-    PerunModel Nothing -> fail "unclosed channel should persist in PerunModel"
-    PerunModel (Just _) -> action $ ForceClose wb (wa, wb) 42069
+    PerunModel Nothing -> fail $ "PerunModel must contain active channel: " <> msg
+    PerunModel (Just c) -> return c
+
+requireWithChannel :: String -> ((ChannelState, Integer) -> DL PerunModel a) -> DL PerunModel a
+requireWithChannel msg f = requireGetChannel msg >>= f
 
 maliciousDisputeTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 maliciousDisputeTest (wa, wb, wf) = do
-  (initBalA, initBalB) <- forAllQ $ both chooseQ ((5_000_000, 20_000_000), (5_000_000, 20_000_000))
-  action $ Open wf (wa, wb) 42069 initBalA initBalB 15000
-
+  channelID <- forAllQ arbitraryQ
+  (initBalA, initBalB) <- forAllQ $ both chooseQ ((initBalLB, initBalUB), (initBalLB, initBalUB))
+  action $ Open wf (wa, wb) channelID initBalA initBalB defaultTimeLock
   firstUpdate <-
-    getContractState >>= \case
-      PerunModel Nothing -> fail "opening a channel should be tracked in PerunModel"
-      PerunModel (Just (cs, _)) -> aPaysB cs 420
+    requireGetChannel "channel must be available after opening"
+      >>= ( \(cs, _) ->
+              forAllQ (chooseQ (0, initBalLB `div` 2))
+                >>= aPaysB cs
+          )
   action $ Update firstUpdate
-
   secondUpdate <-
-    getContractState >>= \case
-      PerunModel Nothing -> fail "opening a channel should be tracked in PerunModel"
-      PerunModel (Just (cs, _)) -> aPaysB cs 6969
+    requireGetChannel "channel must be available after opening"
+      >>= ( \(cs, _) ->
+              forAllQ (chooseQ (0, initBalLB `div` 2))
+                >>= aPaysB cs
+          )
   action $ Update secondUpdate
 
-  getContractState >>= \case
-    PerunModel Nothing -> fail "unclosed channel should persist in PerunModel"
-    PerunModel (Just _) -> action $ Dispute wa (wa, wb) 42069 firstUpdate
+  action $ Dispute wa (wa, wb) channelID firstUpdate
+  action $ Dispute wb (wa, wb) channelID secondUpdate
 
-  getContractState >>= \case
-    PerunModel Nothing -> fail "unclosed channel should persist in PerunModel"
-    PerunModel (Just _) -> action $ Dispute wb (wa, wb) 42069 secondUpdate
   action $ Wait 16
+  action $ ForceClose wb (wa, wb) channelID
 
-
-  getContractState >>= \case
-    PerunModel Nothing -> fail "unclosed channel should persist in PerunModel"
-    PerunModel (Just _) -> action $ ForceClose wb (wa, wb) 42069
-
-
+-- | genChainedChannelUpdates generates `n` successive channel updates on the
+-- | channel contained in `PerunModel`.
+-- | It generates valid updates as long as `n <= initBalLB`.
+-- | NOTE: Something is weird when executing actions using `mapM/mapM_`, which
+-- | is necessary to make proper use of this function.
+genChainedChannelUpdates :: Integer -> DL PerunModel [ChannelState]
+genChainedChannelUpdates n =
+  mapM
+    ( const $
+        requireGetChannel "channel must be available after opening"
+          >>= ( \(cs, _) ->
+                  forAllQ (chooseQ (0, initBalLB `div` n))
+                    >>= aPaysB cs
+              )
+    )
+    $ take (fromIntegral n) [() ..]
 
 aPaysB :: ChannelState -> Integer -> DL PerunModel ChannelState
-aPaysB cs@(ChannelState _ bA bB v _) delta = do
+aPaysB cs@(ChannelState _ bA bB v _) delta =
   return cs {balanceA = bA - delta, balanceB = bB + delta, version = v + 1}
 
 propPerunDummy :: Actions PerunModel -> Property
 propPerunDummy = propRunActions_
 
--- TODO find a way to actually run *all* unit tests
-propUnitTest :: Property
-propUnitTest = withMaxSuccess 1 $ forAllDL (maliciousDisputeTest (w1, w2, w3)) propPerunDummy
+prop_HonestPaymentTest :: Property
+prop_HonestPaymentTest = withMaxSuccess 1 $ forAllDL (honestPaymentTest (w1, w2, w3)) propPerunDummy
+
+prop_SingleDisputeTest :: Property
+prop_SingleDisputeTest = withMaxSuccess 1 $ forAllDL (singleDisputeTest (w1, w2, w3)) propPerunDummy
+
+prop_MaliciousDisputeTest :: Property
+prop_MaliciousDisputeTest = withMaxSuccess 1 $ forAllDL (maliciousDisputeTest (w1, w2, w3)) propPerunDummy
+
+return [] -- <- Needed for TemplateHaskell to do some magic and find the property tests.
+
+-- NOTE: Automatically discovered properties are functions of type `Property`
+-- having a `prop_` prefix!
+runPerunDummyTests :: IO Bool
+runPerunDummyTests = $quickCheckAll
