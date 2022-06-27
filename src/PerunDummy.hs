@@ -28,6 +28,9 @@ module PerunDummy
     CloseParams (..),
     ForceCloseParams (..),
     ChannelSchema,
+    ChannelTypes,
+    ChannelAction,
+    ChannelDatum,
     open,
     dispute,
     close,
@@ -61,6 +64,8 @@ import PlutusTx.Prelude hiding (unless)
 import Schema (ToSchema)
 import Text.Printf (printf)
 import qualified Prelude as P
+import Verifier.Honest
+import Types
 
 --
 --
@@ -68,99 +73,9 @@ import qualified Prelude as P
 --
 --
 
-type ChannelID = Integer
-
 defaultValidMsRange :: POSIXTime
 defaultValidMsRange = 10000
 
--- Parameters of the channel
-data Channel = Channel
-  { pTimeLock :: !Integer,
-    pSigningPKA :: !PaymentPubKey,
-    pSigningPKB :: !PaymentPubKey,
-    pPaymentPKA :: !PaymentPubKeyHash,
-    pPaymentPKB :: !PaymentPubKeyHash
-  }
-  deriving (P.Show, Generic, ToJSON, FromJSON, ToSchema)
-
--- Equality of two Channels
-instance Eq Channel where
-  {-# INLINEABLE (==) #-}
-  a == b =
-    (pTimeLock a == pTimeLock b)
-      && (pSigningPKA a == pSigningPKA b)
-      && (pSigningPKB a == pSigningPKB b)
-      && (pPaymentPKA a == pPaymentPKA b)
-      && (pPaymentPKB a == pPaymentPKB b)
-
-PlutusTx.unstableMakeIsData ''Channel
-PlutusTx.makeLift ''Channel
-
-data ChannelState = ChannelState
-  { channelId :: !ChannelID,
-    balanceA :: !Integer,
-    balanceB :: !Integer,
-    version :: !Integer,
-    final :: !Bool
-  }
-  deriving (Data)
-  deriving stock (P.Eq, P.Show)
-
-instance Eq ChannelState where
-  {-# INLINEABLE (==) #-}
-  b == c =
-    (channelId b == channelId c)
-      && (balanceA b == balanceA c)
-      && (balanceB b == balanceB c)
-      && (version b == version c)
-      && (final b == final c)
-
-PlutusTx.unstableMakeIsData ''ChannelState
-PlutusTx.makeLift ''ChannelState
-
-data SignedState = SignedState
-  { sigA :: !(SignedMessage ChannelState),
-    sigB :: !(SignedMessage ChannelState)
-  }
-  deriving (Generic, ToJSON, FromJSON)
-  deriving stock (P.Eq, P.Show)
-
-instance Eq SignedState where
-  {-# INLINEABLE (==) #-}
-  (SignedState a b) == (SignedState c d) =
-    (a == c) && (b == d)
-
-
-
-PlutusTx.unstableMakeIsData ''SignedState
-PlutusTx.makeLift ''SignedState
-
--- Redeemer Datatype
-data ChannelAction = MkDispute SignedState | MkClose SignedState | ForceClose
-  deriving (P.Show)
-
-PlutusTx.unstableMakeIsData ''ChannelAction
-PlutusTx.makeLift ''ChannelAction
-
--- Datum datatype
-data ChannelDatum = ChannelDatum
-  { channelParameters :: !Channel,
-    state :: !ChannelState,
-    time :: !Ledger.POSIXTime,
-    disputed :: !Bool
-  }
-  deriving (P.Show)
-
-PlutusTx.unstableMakeIsData ''ChannelDatum
-PlutusTx.makeLift ''ChannelDatum
-
--- Boilerplate code that allows us to use our custom types for Datum and
--- Redeemer in the Validator script instead of BuiltinData
-data ChannelTypes
-
-instance Scripts.ValidatorTypes ChannelTypes where
-  type RedeemerType ChannelTypes = ChannelAction
-  type DatumType ChannelTypes = ChannelDatum
 
 -- | Returns true, iff the new state is a valid post-state of the old channel state.
 -- | A valid state transition must retain the channelId and the sum of the balances.
@@ -352,39 +267,27 @@ channelAddress = scriptHashAddress . channelHash
 -- Parameters for Endpoints, that can then be invoked
 --
 
-data OpenParams = OpenParams
-  { spChannelId :: !ChannelID,
-    spSigningPKA :: !PaymentPubKey,
-    spSigningPKB :: !PaymentPubKey,
-    spPaymentPKA :: !PaymentPubKeyHash,
-    spPaymentPKB :: !PaymentPubKeyHash,
-    spBalanceA :: !Integer,
-    spBalanceB :: !Integer,
-    spTimeLock :: !Integer
-  }
-  deriving (Generic, ToJSON, FromJSON, ToSchema)
-  deriving stock (P.Eq, P.Show)
-
-data DisputeParams = DisputeParams
-  { dpSigningPKA :: !PaymentPubKey,
-    dpSigningPKB :: !PaymentPubKey,
-    dpSignedState :: !SignedState
-  }
-  deriving (Generic, ToJSON, FromJSON)
-  deriving stock (P.Eq, P.Show)
-
-data CloseParams = CloseParams
-  { cpSigningPKA :: !PaymentPubKey,
-    cpSigningPKB :: !PaymentPubKey,
-    cpSignedState :: !SignedState
+data MockParams = MockParams
+  { mockChannelId :: !ChannelID,
+    mockSigningPKA :: !PaymentPubKey,
+    mockSigningPKB :: !PaymentPubKey,
+    mockPaymentPKA :: !PaymentPubKeyHash,
+    mockPaymentPKB :: !PaymentPubKeyHash,
+    mockBalanceA :: !Integer,
+    mockBalanceB :: !Integer,
+    mockValue :: !Integer,
+    mockVersion :: !Integer,
+    mockFinal :: !Bool,
+    mockTimeLock :: !Integer,
+    mockTimeStamp :: !POSIXTime,
+    mockDisputed :: !Bool,
+    mockSignedState :: !(Maybe SignedState),
+    mockValidTimeRange :: !(Maybe POSIXTimeRange)
   }
   deriving (Generic, ToJSON, FromJSON)
   deriving stock (P.Eq, P.Show)
 
-newtype ForceCloseParams = ForceCloseParams ChannelID
-  deriving newtype (ToJSON, FromJSON)
-  deriving (Generic)
-  deriving stock (P.Eq, P.Show)
+
 
 type ChannelSchema =
   Endpoint "open" OpenParams
@@ -395,6 +298,83 @@ type ChannelSchema =
 --
 -- open channel
 --
+
+mockOpen :: AsContractError e => MockParams -> Contract w s e ()
+mockOpen MockParams {..} = do
+  let c =
+        Channel
+          { pTimeLock = mockTimeLock,
+            pSigningPKA = mockSigningPKA,
+            pSigningPKB = mockSigningPKB,
+            pPaymentPKA = mockPaymentPKA,
+            pPaymentPKB = mockPaymentPKB
+          }
+      s =
+        ChannelState
+          { channelId = mockChannelId,
+            balanceA = mockBalanceA,
+            balanceB = mockBalanceB,
+            version = mockVersion,
+            final = mockFinal
+          }
+      d =
+        ChannelDatum
+          { channelParameters = c,
+            state = s,
+            time = mockTimeStamp,
+            disputed = mockDisputed
+          }
+      v = Ada.lovelaceValueOf mockValue
+      tx = Constraints.mustPayToTheScript d v
+  ledgerTx <- submitTxConstraints (typedChannelValidator mockChannelId) tx
+  void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
+  logInfo @P.String $ printf "Opened channel %d with parameters %s and value %s" mockChannelId (P.show c) (P.show v)
+
+mockDispute :: forall w s. MockParams -> Contract w s Text ()
+mockDispute MockParams {..} = do
+  (oref, o, d) <- findChannel  mockChannelId
+  logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
+  sst <- case mockSignedState of
+    Nothing -> throwError "missing signed state"
+    Just s -> return s
+  let c =
+        Channel
+          { pTimeLock = mockTimeLock,
+            pSigningPKA = mockSigningPKA,
+            pSigningPKB = mockSigningPKB,
+            pPaymentPKA = mockPaymentPKA,
+            pPaymentPKB = mockPaymentPKB
+          }
+      s =
+        ChannelState
+          { channelId = mockChannelId,
+            balanceA = mockBalanceA,
+            balanceB = mockBalanceB,
+            version = mockVersion,
+            final = mockFinal
+          }
+      datum =
+        ChannelDatum
+          { channelParameters = c,
+            state = s,
+            time = mockTimeStamp,
+            disputed = mockDisputed
+          }
+      v = Ada.lovelaceValueOf mockValue
+      
+      r = Redeemer $ PlutusTx.toBuiltinData $ MkDispute sst
+      lookups =
+        Constraints.typedValidatorLookups (typedChannelValidator mockChannelId)
+          P.<> Constraints.otherScript (channelValidator mockChannelId)
+          P.<> Constraints.unspentOutputs (Map.singleton oref o)
+      tx =
+        Constraints.mustPayToTheScript datum v
+          <> Constraints.mustValidateIn (fromMaybe (always :: Interval POSIXTime)  mockValidTimeRange)
+          <> Constraints.mustSpendScriptOutput oref r
+  ledgerTx <- submitTxConstraintsWith lookups tx
+  void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
+  logInfo @P.String $ printf "made dispute of new state %s" (P.show s)
+
 
 -- sets the transaction values for forming the initial auction transaction (endpoint start)
 open :: AsContractError e => OpenParams -> Contract w s e ()
@@ -474,7 +454,7 @@ close (CloseParams pKA pKB sst) = do
     s@ChannelState{..} = extractVerifiedState sst (pKA, pKB)
   (oref, o, d@ChannelDatum {..}) <- findChannel channelId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
-  unless (isValidStateTransition state s) $ 
+  unless (isValidStateTransition state s) $
     throwError $ pack $ printf "state transition invalid"
   unless final $
     throwError $ pack $ printf "can not close unless state is final"
