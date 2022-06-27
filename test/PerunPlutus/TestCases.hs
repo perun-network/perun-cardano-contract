@@ -30,45 +30,36 @@ honestPaymentTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 honestPaymentTest (wa, wb, wf) = do
   channelID <- forAllQ arbitraryQ
   (initBalA, initBalB) <- forAllQ $ both chooseQ ((initBalLB, initBalUB), (initBalLB, initBalUB))
-  action $ Open wf (wa, wb) channelID initBalA initBalB defaultTimeLock
+  action $ Open wf [wa, wb] channelID [initBalA, initBalB] defaultTimeLock
   modChSt <-
     requireWithChannel
       "channel must be available after opening"
       (\(cs, _) -> forAllQ (chooseQ (0, initBalLB)) >>= aPaysB cs)
   action $ Update modChSt
   action Finalize
-  ChannelState cid ba bb v _ <- requireGetChannel "channel must be available after finalization" <&> fst
-  action $ Close wb (wa, wb) cid ba bb v
+  ChannelState cid _ _ _ <- requireGetChannel "channel must be available after finalization" <&> fst
+  action $ Close wb [wa, wb] cid
 
 singleDisputeTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 singleDisputeTest (wa, wb, wf) = do
   channelID <- forAllQ arbitraryQ
   (initBalA, initBalB) <- forAllQ $ both chooseQ ((initBalLB, initBalUB), (initBalLB, initBalUB))
-  action $ Open wf (wa, wb) channelID initBalA initBalB defaultTimeLock
+  action $ Open wf [wa, wb] channelID [initBalA, initBalB] defaultTimeLock
 
   modChSt <-
     requireWithChannel
       "channel must be available after opening"
       (\(cs, _) -> forAllQ (chooseQ (0, initBalLB)) >>= aPaysB cs)
   action $ Update modChSt
-  action $ Dispute wb (wa, wb) channelID modChSt
+  action $ Dispute wb [wa, wb] channelID modChSt
   action $ Wait 16
-  action $ ForceClose wb (wa, wb) channelID
-
-requireGetChannel :: String -> DL PerunModel (ChannelState, Integer)
-requireGetChannel msg =
-  getContractState >>= \case
-    PerunModel Nothing -> fail $ "PerunModel must contain active channel: " <> msg
-    PerunModel (Just c) -> return c
-
-requireWithChannel :: String -> ((ChannelState, Integer) -> DL PerunModel a) -> DL PerunModel a
-requireWithChannel msg f = requireGetChannel msg >>= f
+  action $ ForceClose wb [wa, wb] channelID
 
 maliciousDisputeTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 maliciousDisputeTest (wa, wb, wf) = do
   channelID <- forAllQ arbitraryQ
   (initBalA, initBalB) <- forAllQ $ both chooseQ ((initBalLB, initBalUB), (initBalLB, initBalUB))
-  action $ Open wf (wa, wb) channelID initBalA initBalB defaultTimeLock
+  action $ Open wf [wa, wb] channelID [initBalA, initBalB] defaultTimeLock
   firstUpdate <-
     requireGetChannel "channel must be available after opening"
       >>= ( \(cs, _) ->
@@ -84,11 +75,20 @@ maliciousDisputeTest (wa, wb, wf) = do
           )
   action $ Update secondUpdate
 
-  action $ Dispute wa (wa, wb) channelID firstUpdate
-  action $ Dispute wb (wa, wb) channelID secondUpdate
+  action $ Dispute wa [wa, wb] channelID firstUpdate
+  action $ Dispute wb [wa, wb] channelID secondUpdate
 
   action $ Wait 16
-  action $ ForceClose wb (wa, wb) channelID
+  action $ ForceClose wb [wa, wb] channelID
+
+requireGetChannel :: String -> DL PerunModel (ChannelState, Integer)
+requireGetChannel msg =
+  getContractState >>= \case
+    PerunModel Nothing -> fail $ "PerunModel must contain active channel: " <> msg
+    PerunModel (Just c) -> return c
+
+requireWithChannel :: String -> ((ChannelState, Integer) -> DL PerunModel a) -> DL PerunModel a
+requireWithChannel msg f = requireGetChannel msg >>= f
 
 -- | genChainedChannelUpdates generates `n` successive channel updates on the
 -- | channel contained in `PerunModel`.
@@ -108,8 +108,8 @@ genChainedChannelUpdates n =
     $ take (fromIntegral n) [() ..]
 
 aPaysB :: ChannelState -> Integer -> DL PerunModel ChannelState
-aPaysB cs@(ChannelState _ bA bB v _) delta =
-  return cs {balanceA = bA - delta, balanceB = bB + delta, version = v + 1}
+aPaysB cs@(ChannelState _ balances v _) delta =
+  return cs {balances = [head balances - delta, balances!!1 + delta] ++ tail (tail balances), version = v + 1}
 
 propPerunDummy :: Actions PerunModel -> Property
 propPerunDummy = propRunActions_
