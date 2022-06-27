@@ -57,12 +57,12 @@ import qualified Ledger.Constraints as Constraints
 import qualified Ledger.Typed.Scripts as Scripts
 import Playground.Contract (ensureKnownCurrencies, printJson, printSchemas, stage)
 import Plutus.Contract
-import Plutus.Contract.Oracle (SignedMessage (..), SignedMessageCheckError (..), verifySignedMessageConstraints)
 import qualified PlutusTx
 import PlutusTx.Prelude hiding (unless)
 import Schema (ToSchema)
 import Text.Printf (printf)
 import qualified Prelude as P
+import Plutus.Contract.Oracle (SignedMessage, verifySignedMessageConstraints)
 
 --
 --
