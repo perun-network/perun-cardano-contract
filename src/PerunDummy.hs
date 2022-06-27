@@ -15,6 +15,8 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Use &&" #-}
 
 --
 -- Remove this module header when in Playground
@@ -76,30 +78,25 @@ defaultValidMsRange = 10000
 -- Parameters of the channel
 data Channel = Channel
   { pTimeLock :: !Integer,
-    pSigningPKA :: !PaymentPubKey,
-    pSigningPKB :: !PaymentPubKey,
-    pPaymentPKA :: !PaymentPubKeyHash,
-    pPaymentPKB :: !PaymentPubKeyHash
+    pSigningPKs :: ![PaymentPubKey],
+    pPaymentPKs :: ![PaymentPubKeyHash]
   }
-  deriving (P.Show, Generic, ToJSON, FromJSON, ToSchema)
+  deriving (P.Show, Generic, ToJSON, FromJSON)
 
 -- Equality of two Channels
 instance Eq Channel where
   {-# INLINEABLE (==) #-}
   a == b =
     (pTimeLock a == pTimeLock b)
-      && (pSigningPKA a == pSigningPKA b)
-      && (pSigningPKB a == pSigningPKB b)
-      && (pPaymentPKA a == pPaymentPKA b)
-      && (pPaymentPKB a == pPaymentPKB b)
+      && (pSigningPKs a == pSigningPKs b)
+      && (pPaymentPKs a == pPaymentPKs b)
 
 PlutusTx.unstableMakeIsData ''Channel
 PlutusTx.makeLift ''Channel
 
 data ChannelState = ChannelState
   { channelId :: !ChannelID,
-    balanceA :: !Integer,
-    balanceB :: !Integer,
+    balances :: ![Integer],
     version :: !Integer,
     final :: !Bool
   }
@@ -110,8 +107,7 @@ instance Eq ChannelState where
   {-# INLINEABLE (==) #-}
   b == c =
     (channelId b == channelId c)
-      && (balanceA b == balanceA c)
-      && (balanceB b == balanceB c)
+      && (balances b == balances c)
       && (version b == version c)
       && (final b == final c)
 
@@ -119,16 +115,14 @@ PlutusTx.unstableMakeIsData ''ChannelState
 PlutusTx.makeLift ''ChannelState
 
 data SignedState = SignedState
-  { sigA :: !(SignedMessage ChannelState),
-    sigB :: !(SignedMessage ChannelState)
+  { stateSigs :: ![SignedMessage ChannelState]
   }
   deriving (Generic, ToJSON, FromJSON)
   deriving stock (P.Eq, P.Show)
 
 instance Eq SignedState where
   {-# INLINEABLE (==) #-}
-  (SignedState a b) == (SignedState c d) =
-    (a == c) && (b == d)
+  a == b = stateSigs a == stateSigs b
 
 
 
@@ -170,22 +164,37 @@ instance Scripts.ValidatorTypes ChannelTypes where
 isValidStateTransition :: ChannelState -> ChannelState -> Bool
 isValidStateTransition old new =
   (channelId old == channelId new)
-    && ((balanceA old + balanceB old) == (balanceA new + balanceB new))
+    && (sum (balances old) == sum (balances new))
     && (version old < version new)
     && not (final old)
+
+
+-- | pls work
+{-# INLINEABLE extractVerifiedState #-}
+extractVerifiedState :: SignedState -> [PaymentPubKey] -> ChannelState
+extractVerifiedState (SignedState sigs) signingKeys =
+  let states = zipWith verifySignedMessageConstraints' signingKeys sigs in
+  if and $ PlutusTx.Prelude.map (== head states) (tail states) then
+    (case head states of
+      Just s -> s
+      Nothing -> traceError "invalid signatures") else
+        traceError "invalidSignatures"
+
 
 -- | Checks all signatures on the given SignedState under the given public keys
 -- | and returns the corresponding ChannelState if all signatures are valid on 
 -- | the same ChannelState.
-{-# INLINEABLE extractVerifiedState #-}
-extractVerifiedState :: SignedState -> (PaymentPubKey, PaymentPubKey) -> ChannelState
-extractVerifiedState (SignedState smA smB) (pkA, pkB) = case (verifySignedMessageConstraints' pkA smA, verifySignedMessageConstraints' pkB smB) of
-  (Right (sa, _), Right (sb, _)) -> if sa == sb then sa else traceError "signatures on different states"
-  _ -> traceError "invalid signatures"
+--{-# INLINEABLE extractVerifiedState #-}
+--extractVerifiedState :: SignedState -> (PaymentPubKey, PaymentPubKey) -> ChannelState
+--extractVerifiedState (SignedState smA smB) (pkA, pkB) = case (verifySignedMessageConstraints' pkA smA, verifySignedMessageConstraints' pkB smB) of
+--  (Right (sa, _), Right (sb, _)) -> if sa == sb then sa else traceError "signatures on different states"
+--  _ -> traceError "invalid signatures"
 
 {-# INLINEABLE verifySignedMessageConstraints' #-}
-verifySignedMessageConstraints' :: PaymentPubKey -> SignedMessage ChannelState -> Either SignedMessageCheckError (ChannelState, Constraints.TxConstraints () ())
-verifySignedMessageConstraints' = verifySignedMessageConstraints
+verifySignedMessageConstraints' :: PaymentPubKey -> SignedMessage ChannelState -> Maybe ChannelState
+verifySignedMessageConstraints' sKey sm = case verifySignedMessageConstraints sKey sm of
+  Left _ -> Nothing
+  Right (s, _ :: Constraints.TxConstraints () ()) -> Just s
 
 -- Params:
 --  Datum
@@ -200,7 +209,7 @@ mkChannelValidator cID oldDatum action ctx =
     && case action of
       -- Dispute Case:
       MkDispute st ->
-        let newState = extractVerifiedState st (pSigningPKA (channelParameters oldDatum), pSigningPKB (channelParameters oldDatum))
+        let newState = extractVerifiedState st (pSigningPKs $ channelParameters oldDatum)
          in and
               [ -- check that the state in the dispute is reflected in the output datum
                 traceIfFalse "output state does not match the state in the dispute" (newState == state outputDatum),
@@ -219,15 +228,13 @@ mkChannelValidator cID oldDatum action ctx =
               ]
       -- Close Case:
       MkClose st ->
-        let newState = extractVerifiedState st (pSigningPKA (channelParameters oldDatum), pSigningPKB (channelParameters oldDatum))
+        let newState = extractVerifiedState st (pSigningPKs $ channelParameters oldDatum)
          in and
               [ traceIfFalse "Closing state does not belong to this channel" (cID == channelId newState),
                 -- check that the state is final
                 traceIfFalse "The closing state is not final" (final newState),
                 -- check that A receives their balance
-                traceIfFalse "Party A did not get their balance" (getsValue (pPaymentPKA (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceA newState)),
-                -- check that B receives their balance
-                traceIfFalse "Party B did not get their balance" (getsValue (pPaymentPKB (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceB newState))
+                traceIfFalse "A party did not get their balance" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (balances newState)))
               ]
       -- ForceClose Case:
       ForceClose ->
@@ -236,10 +243,8 @@ mkChannelValidator cID oldDatum action ctx =
             traceIfFalse "try to force close without prior dispute" (disputed oldDatum),
             -- check that the relative time-lock is past
             traceIfFalse "too early" correctForceCloseSlotRange,
-            -- check that Party A receives their balance
-            traceIfFalse "Party A did not get their balance" (getsValue (pPaymentPKA (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceA oldState)),
-            -- check that Party B receives their balance
-            traceIfFalse "Party B did not get their balance" (getsValue (pPaymentPKB (channelParameters oldDatum)) $ Ada.lovelaceValueOf (balanceB oldState))
+            -- check that A receives their balance
+            traceIfFalse "A party did not get their balance" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (balances oldState)))
           ]
   where
     -- | The out-scripts view of the transaction body of the consuming transaction
@@ -263,7 +268,7 @@ mkChannelValidator cID oldDatum action ctx =
     oldState = state oldDatum
 
     correctInputValue :: Bool
-    correctInputValue = inVal == Ada.lovelaceValueOf (balanceA oldState + balanceB oldState)
+    correctInputValue = inVal == Ada.lovelaceValueOf (sum $ balances oldState)
 
     ownOutput :: TxOut
     outputDatum :: ChannelDatum
@@ -280,7 +285,7 @@ mkChannelValidator cID oldDatum action ctx =
     -- | Check that the output of the bidding transaction maintains the channel funding
     correctChannelFunding :: Bool
     correctChannelFunding =
-      txOutValue ownOutput == Ada.lovelaceValueOf (balanceA oldState + balanceB oldState)
+      txOutValue ownOutput == Ada.lovelaceValueOf (sum $ balances oldState)
 
     getPOSIXStartTime :: LowerBound (Interval POSIXTime) -> POSIXTime
     getPOSIXStartTime (LowerBound (Finite (Interval b _)) _) = getPOSIXTimeFromLowerBound b
@@ -311,12 +316,12 @@ mkChannelValidator cID oldDatum action ctx =
     correctForceCloseSlotRange = from (time oldDatum + fromMilliSeconds (DiffMilliSeconds (pTimeLock (channelParameters oldDatum)))) `contains` txInfoValidRange info
 
     -- Returns true if party h is payed value v in an output of the transaction
-    getsValue :: PaymentPubKeyHash -> Value -> Bool
+    getsValue :: PaymentPubKeyHash -> Integer -> Bool
     getsValue pkh v =
       let [o] =
             [ o'
               | o' <- txInfoOutputs info,
-                txOutValue o' == v
+                txOutValue o' == Ada.lovelaceValueOf v
             ]
        in txOutAddress o == pubKeyHashAddress pkh Nothing
 
@@ -354,28 +359,23 @@ channelAddress = scriptHashAddress . channelHash
 
 data OpenParams = OpenParams
   { spChannelId :: !ChannelID,
-    spSigningPKA :: !PaymentPubKey,
-    spSigningPKB :: !PaymentPubKey,
-    spPaymentPKA :: !PaymentPubKeyHash,
-    spPaymentPKB :: !PaymentPubKeyHash,
-    spBalanceA :: !Integer,
-    spBalanceB :: !Integer,
+    spSigningPKs :: ![PaymentPubKey],
+    spPaymentPKs :: ![PaymentPubKeyHash],
+    spBalances :: ![Integer],
     spTimeLock :: !Integer
   }
   deriving (Generic, ToJSON, FromJSON, ToSchema)
   deriving stock (P.Eq, P.Show)
 
 data DisputeParams = DisputeParams
-  { dpSigningPKA :: !PaymentPubKey,
-    dpSigningPKB :: !PaymentPubKey,
+  { dpSigningPKs :: ![PaymentPubKey],
     dpSignedState :: !SignedState
   }
   deriving (Generic, ToJSON, FromJSON)
   deriving stock (P.Eq, P.Show)
 
 data CloseParams = CloseParams
-  { cpSigningPKA :: !PaymentPubKey,
-    cpSigningPKB :: !PaymentPubKey,
+  { cpSigningPKs :: ![PaymentPubKey],
     cpSignedState :: !SignedState
   }
   deriving (Generic, ToJSON, FromJSON)
@@ -403,16 +403,13 @@ open OpenParams {..} = do
   let c =
         Channel
           { pTimeLock = spTimeLock,
-            pSigningPKA = spSigningPKA,
-            pSigningPKB = spSigningPKB,
-            pPaymentPKA = spPaymentPKA,
-            pPaymentPKB = spPaymentPKB
+            pSigningPKs = spSigningPKs,
+            pPaymentPKs = spPaymentPKs
           }
       s =
         ChannelState
           { channelId = spChannelId,
-            balanceA = spBalanceA,
-            balanceB = spBalanceB,
+            balances = spBalances,
             version = 0,
             final = False
           }
@@ -423,7 +420,7 @@ open OpenParams {..} = do
             time = t,
             disputed = False
           }
-      v = Ada.lovelaceValueOf (spBalanceA + spBalanceB)
+      v = Ada.lovelaceValueOf $ sum spBalances
       tx = Constraints.mustPayToTheScript d v
   ledgerTx <- submitTxConstraints (typedChannelValidator spChannelId) tx
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
@@ -434,9 +431,9 @@ open OpenParams {..} = do
 --
 
 dispute :: forall w s. DisputeParams -> Contract w s Text ()
-dispute (DisputeParams pKA pKB sst) = do
+dispute (DisputeParams keys sst) = do
   let
-    dState = extractVerifiedState sst (pKA, pKB)
+    dState = extractVerifiedState sst keys
   t <- currentTime
   (oref, o, d@ChannelDatum {..}) <- findChannel $ channelId dState
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
@@ -449,7 +446,7 @@ dispute (DisputeParams pKA pKB sst) = do
             time = t,
             disputed = True
           }
-      v = Ada.lovelaceValueOf (balanceA state + balanceB state)
+      v = Ada.lovelaceValueOf $ sum $ balances state
       r = Redeemer $ PlutusTx.toBuiltinData $ MkDispute sst
 
       lookups =
@@ -469,12 +466,12 @@ dispute (DisputeParams pKA pKB sst) = do
 --
 
 close :: forall w s. CloseParams -> Contract w s Text ()
-close (CloseParams pKA pKB sst) = do
+close (CloseParams keys sst) = do
   let
-    s@ChannelState{..} = extractVerifiedState sst (pKA, pKB)
+    s@ChannelState{..} = extractVerifiedState sst keys
   (oref, o, d@ChannelDatum {..}) <- findChannel channelId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
-  unless (isValidStateTransition state s) $ 
+  unless (isValidStateTransition state s) $
     throwError $ pack $ printf "state transition invalid"
   unless final $
     throwError $ pack $ printf "can not close unless state is final"
@@ -485,18 +482,16 @@ close (CloseParams pKA pKB sst) = do
         P.<> Constraints.otherScript (channelValidator channelId)
         P.<> Constraints.unspentOutputs (Map.singleton oref o)
     tx =
-      Constraints.mustPayToPubKey (pPaymentPKA channelParameters) (Ada.lovelaceValueOf balanceA)
-        <> Constraints.mustPayToPubKey (pPaymentPKB channelParameters) (Ada.lovelaceValueOf balanceB)
+      mconcat (zipWith Constraints.mustPayToPubKey (pPaymentPKs channelParameters) (PlutusTx.Prelude.map Ada.lovelaceValueOf balances))
         <> Constraints.mustSpendScriptOutput oref r
   ledgerTx <- submitTxConstraintsWith lookups tx
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $
     printf
-      "closed channel %d with params %s. The final balance is: (%d, %d)"
+      "closed channel %d with params %s. The final balances are: %s"
       channelId
       (P.show channelParameters)
-      balanceA
-      balanceB
+      (P.show balances)
 
 --
 -- close logic
@@ -514,19 +509,17 @@ forceClose (ForceCloseParams cId) = do
           P.<> Constraints.otherScript (channelValidator cId)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
-        Constraints.mustPayToPubKey (pPaymentPKA channelParameters) (Ada.lovelaceValueOf (balanceA state))
-          <> Constraints.mustPayToPubKey (pPaymentPKB channelParameters) (Ada.lovelaceValueOf (balanceB state))
+        mconcat (zipWith Constraints.mustPayToPubKey (pPaymentPKs channelParameters) (PlutusTx.Prelude.map Ada.lovelaceValueOf (balances state)))
           <> Constraints.mustValidateIn (from (time + 1 + fromMilliSeconds (DiffMilliSeconds (pTimeLock channelParameters))))
           <> Constraints.mustSpendScriptOutput oref r
   ledgerTx <- submitTxConstraintsWith lookups tx
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $
     printf
-      "force closed channel %d with parameters %s. The final balance is: (%d, %d)"
+      "force closed channel %d with parameters %s. The final balance are: %s"
       cId
       (P.show channelParameters)
-      (balanceA state)
-      (balanceB state)
+      (P.show $ balances state)
 
 findChannel ::
   ChannelID ->
