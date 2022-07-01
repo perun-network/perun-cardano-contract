@@ -9,6 +9,8 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
+{-# LANGUAGE NoImplicitPrelude #-}
+
 
 
 module PerunPlutus.PerunDummySpec where
@@ -27,6 +29,12 @@ import Plutus.Contract.Test.ContractModel
 import qualified Plutus.Trace.Emulator as Trace
 import qualified Wallet.Emulator.Wallet as Trace
 import Control.Monad
+import qualified Plutus.V1.Ledger.Ada as Ada
+import Plutus.Contract.Test.ContractModel (getContractState)
+import PlutusTx.Prelude hiding (unless, mapM)
+import qualified Prelude as P
+
+
 
 wallets :: [Wallet]
 wallets = [w1, w2, w3]
@@ -34,13 +42,14 @@ wallets = [w1, w2, w3]
 exVal :: Value.Value
 exVal = Ada.lovelaceValueOf 1
 
-newtype PerunModel = PerunModel (Maybe (ChannelState, Integer)) deriving (Show, Eq, Data)
+-- | PerunModel: State, Timelock, Funding, Funded
+newtype PerunModel = PerunModel (Maybe (ChannelState, Integer, [Integer], Bool)) deriving (P.Show, P.Eq, Data)
 
-deriving instance Eq (ContractInstanceKey PerunModel w schema err params)
+deriving instance P.Eq (ContractInstanceKey PerunModel w schema err params)
 
-deriving instance Ord (ContractInstanceKey PerunModel w schema err params)
+deriving instance P.Ord (ContractInstanceKey PerunModel w schema err params)
 
-deriving instance Show (ContractInstanceKey PerunModel w schema err params)
+deriving instance P.Show (ContractInstanceKey PerunModel w schema err params)
 
 instance ContractModel PerunModel where
   {--
@@ -48,7 +57,20 @@ instance ContractModel PerunModel where
    - Only supporting two party channels for now.
   --}
   data Action PerunModel
-    = -- | Open Issuer Participants ChannelID Balances Timelock.
+    =
+      -- | Start the channel (with insufficient funding)
+      -- | Participants ChanelID Balances Timelock 
+      Start [Wallet] Integer [Integer] Integer
+    |
+      -- | Fund the channel
+      -- | Funder Index ChannelID
+      Fund Wallet Integer Integer
+    |
+      -- | Abort the channel
+      -- | Issuer wallets ChannelID
+      Abort Wallet [Wallet] Integer
+    |
+      -- | Open Issuer Participants ChannelID Balances Timelock.
       Open Wallet [Wallet] Integer [Integer] Integer
     | -- | Close Issuer Participants ChannelId.
       Close Wallet [Wallet] Integer
@@ -62,7 +84,7 @@ instance ContractModel PerunModel where
       Finalize
     | -- | Wait Slots
       Wait Integer
-    deriving stock (Show, Eq)
+    deriving stock (P.Show, P.Eq)
     deriving (Data)
 
   data ContractInstanceKey PerunModel w schema err param where
@@ -77,7 +99,7 @@ instance ContractModel PerunModel where
 
   instanceWallet (Participant w) = w
 
-  arbitraryAction _ = undefined
+  arbitraryAction _ = P.undefined
 
   -- Initially there is not channel.
   initialState = PerunModel Nothing
@@ -86,6 +108,44 @@ instance ContractModel PerunModel where
   -- channel.
   -- Furthermore the `Contract` managing the funds has to know that it holds
   -- the balances for each wallet.
+  nextState (Start parties cid startBalances timeLock) = do
+    modifyContractState $ \_ ->
+      PerunModel
+        ( Just
+            (ChannelState
+              { channelId = cid,
+                balances = startBalances,
+                version = 0,
+                final = False
+              }, timeLock, head startBalances : tail (map (const 0) startBalances), False)
+        )
+    withdraw (head parties) $ Ada.lovelaceValueOf $ head startBalances
+    wait 1
+  nextState (Fund funder index cid) = do
+    modifyContractState (\case
+        PerunModel Nothing -> P.error "Funding only works on existing channels"
+        PerunModel (Just (_, _, _, True)) -> P.error "Funding only works on unfunded channels"
+        PerunModel (Just (cs, tl, oldFunding, oldFunded)) ->
+          let newFunding = addFunding (balances cs!!index) index oldFunding in
+          PerunModel
+            ( Just
+              (cs, tl, newFunding, newFunding == balances cs)
+            )
+      )
+    s <-
+      getContractState >>= \case
+        PerunModel (Just (s, _, _, _)) -> return s
+        _ -> P.error "unable to read contract state"
+    withdraw funder $ Ada.lovelaceValueOf (balances s!!index)
+    wait 1
+  nextState (Abort issuer parties cid) = do
+    funding <-
+      getContractState >>= \case
+        PerunModel (Just (_, _, f, False)) -> return f
+        _ -> P.error "Abort only works on existing channels"
+
+    zipWithM_ deposit parties (map Ada.lovelaceValueOf funding)
+    wait 1
   nextState (Open funder _ cid openBalances timeLock) = do
     modifyContractState $ \_ ->
       PerunModel
@@ -95,42 +155,66 @@ instance ContractModel PerunModel where
                 balances = openBalances,
                 version = 0,
                 final = False
-              }, timeLock)
+              }, timeLock, [], True)
         )
     -- Move funds from chan -> Contract instance.
     withdraw funder $ Ada.lovelaceValueOf $ sum openBalances
     wait 1
   nextState (Update cs) = do
     modifyContractState (\case
-        PerunModel Nothing -> error "Update only works on existing channels"
-        PerunModel (Just (_, tl)) ->  PerunModel . Just $ (cs, tl))
+        PerunModel Nothing -> P.error "Update only works on existing channels"
+        PerunModel (Just (_, tl, funding, funded)) ->  PerunModel . Just $ (cs, tl, funding, funded))
   -- TODO add disputed bit to PerunModel and handle it here!
   nextState Dispute {} = do
     modifyContractState (\case
-        PerunModel Nothing -> error "Dispute only works on existing channels"
+        PerunModel Nothing -> P.error "Dispute only works on existing channels"
+        PerunModel (Just (_, _, _, False)) -> P.error "Dispute only works on funded channels"
         x -> x)
     wait 1
   nextState (Close _ parties _) = do
     s <-
       getContractState >>= \case
-        PerunModel Nothing -> error "close only works on existing channels"
-        PerunModel (Just (s, _)) -> return s
+        PerunModel Nothing -> P.error "close only works on existing channels"
+        PerunModel (Just (_, _, _, False)) -> P.error "Close only works on funded channels"
+        PerunModel (Just (s, _, _, True)) -> return s
     zipWithM_ deposit parties (map Ada.lovelaceValueOf (balances s))
     wait 1
   -- ForceClosing does nothing to the contract state, yet.
   nextState (ForceClose _ parties _)  = do
     s <-
       getContractState >>= \case
-        PerunModel Nothing -> error "ForceClose only works on existing channels"
-        PerunModel (Just (s, _)) -> return s
+        PerunModel Nothing -> P.error "ForceClose only works on existing channels"
+        PerunModel (Just (_, _, _, False)) -> P.error "Close only works on funded channels"
+        PerunModel (Just (s, _, _ , True)) -> return s
     zipWithM_ deposit parties (map Ada.lovelaceValueOf (balances s))
     wait 1
   nextState Finalize = modifyContractState (\case
-        PerunModel Nothing -> error "Finalize only works on existing channels"
-        PerunModel (Just (s, tl)) ->  PerunModel . Just $ (s{final=True}, tl))
+        PerunModel Nothing -> P.error "Finalize only works on existing channels"
+        PerunModel (Just (s, tl, fx, f)) ->  PerunModel . Just $ (s{final=True}, tl, fx, f))
   nextState (Wait duration) = wait duration
 
   perform handle _ s cmd = case cmd of
+    (Start parties cid startBalances timeLock) -> do
+      Trace.callEndpoint @"start"
+        (handle $ Participant (head parties))
+        ( OpenParams
+            cid
+            (map mockWalletPaymentPubKey parties)
+            (map mockWalletPaymentPubKeyHash parties)
+            startBalances
+            timeLock
+        )
+      delay 1
+    (Fund funder index cid) -> do
+      Trace.callEndpoint @"fund"
+        (handle $ Participant funder)
+        (FundParams cid index)
+      delay 1
+    (Abort issuer _ cid) -> do
+      Trace.callEndpoint @"abort"
+        (handle $ Participant issuer)
+        (AbortParams cid)
+      delay 1
     (Open wf parties cid balances timelock) -> do
       Trace.callEndpoint @"open"
         (handle $ Participant wf)
@@ -147,7 +231,7 @@ instance ContractModel PerunModel where
       -- onchain wise.
       return ()
     (Dispute issuer parties _ state) -> do
-      walletStates <- mapM (Trace.agentState) parties 
+      walletStates <- mapM Trace.agentState parties
       let sks = map (unPaymentPrivateKey . Trace.ownPaymentPrivateKey) walletStates
       let pks = map Trace.ownPaymentPublicKey walletStates
       Trace.callEndpoint @"dispute"
@@ -161,8 +245,8 @@ instance ContractModel PerunModel where
       let cs = s ^. contractState
       chan <- case cs of
         PerunModel Nothing -> Trace.throwError . Trace.GenericError $ "no channel to close"
-        PerunModel (Just (chan, _)) -> return chan
-      walletStates <- mapM (Trace.agentState) parties 
+        PerunModel (Just (chan, _, _, _)) -> return chan
+      walletStates <- mapM Trace.agentState parties
       let sks = map (unPaymentPrivateKey . Trace.ownPaymentPrivateKey) walletStates
       let pks = map Trace.ownPaymentPublicKey walletStates
       Trace.callEndpoint @"close"
