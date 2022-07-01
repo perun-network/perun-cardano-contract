@@ -1,8 +1,8 @@
 -- {-# OPTIONS_GHC -F -pgmF hspec-discover #-}
-module Main(main) where
+module Main (main) where
 
-import PerunPlutus.PerunDummySpec (propUnitTest)
-import Test.QuickCheck
+import PerunPlutus.TestCases
+import Control.Monad (void)
 
 main :: IO ()
-main = quickCheck propUnitTest
+main = void runPerunDummyTests
