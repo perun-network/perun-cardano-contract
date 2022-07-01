@@ -228,53 +228,55 @@ mkChannelValidator cID oldDatum action ctx =
             traceIfFalse "funded flag incorrect in output datum" checkFundingStatus
           ]
       Abort ->
-            -- no aborts on funded channels
-            traceIfFalse "channel is already funded" (not $ funded oldDatum) &&
-            -- check the authenticity of the abort to prevent DOS
-            traceIfFalse "abort must be issued by channel participant" (or (PlutusTx.Prelude.map (txSignedBy info . unPaymentPubKeyHash) (pPaymentPKs $ channelParameters oldDatum))) &&
-            traceIfFalse "A party was not reimbursed correctly for their funding" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (funding oldDatum)))
+        traceIfFalse "wrong input funding" correctInputFunding &&
+        -- no aborts on funded channels
+        traceIfFalse "channel is already funded" (not $ funded oldDatum) &&
+        -- check the authenticity of the abort to prevent DOS
+        traceIfFalse "abort must be issued by channel participant" (or (PlutusTx.Prelude.map (txSignedBy info . unPaymentPubKeyHash) (pPaymentPKs $ channelParameters oldDatum))) &&
+        -- check that every party gets their funding refunded
+        traceIfFalse "A party was not reimbursed correctly for their funding" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (funding oldDatum)))
       -- Dispute Case:
       MkDispute st ->
-        traceIfFalse "wrong input value" correctInputValue &&
-        let newState = extractVerifiedState st (pSigningPKs $ channelParameters oldDatum)
-         in and
-              [ traceIfFalse "old state must be funded" (funded oldDatum),
-                traceIfFalse "new state must be funded" (funded outputDatum),
-                -- check that the state in the dispute is reflected in the output datum
-                traceIfFalse "output state does not match the state in the dispute" (newState == state outputDatum),
-                -- check that the state transition is valid
-                traceIfFalse "invalid state transition" (isValidStateTransition oldState (state outputDatum)),
-                -- check that the channel id in the state in the dispute matches the actual channel id
-                traceIfFalse "state in dispute does not belong to this channel" (channelId (state outputDatum) == cID),
-                -- check that the channel funding is maintained. This also checks the integrity of the channel script
-                traceIfFalse "wrong output value" correctChannelValue,
-                -- check that the channel parameters stay the same
-                traceIfFalse "channel parameters differ" (channelParameters oldDatum == channelParameters outputDatum),
-                -- check that the time in the output datum is set properly
-                traceIfFalse "invalid time in output datum" (allowedValidRangeSize && outputTimeInValidRange),
-                -- check that the channel is marked as disputed
-                traceIfFalse "failed to mark channel as disputed" (disputed outputDatum)
-              ]
+        let newState = extractVerifiedState st (pSigningPKs $ channelParameters oldDatum) in 
+          and
+            [ traceIfFalse "wrong input value" correctInputValue,
+              traceIfFalse "old state must be funded" (funded oldDatum),
+              traceIfFalse "new state must be funded" (funded outputDatum),
+              -- check that the state in the dispute is reflected in the output datum
+              traceIfFalse "output state does not match the state in the dispute" (newState == state outputDatum),
+              -- check that the state transition is valid
+              traceIfFalse "invalid state transition" (isValidStateTransition oldState (state outputDatum)),
+              -- check that the channel id in the state in the dispute matches the actual channel id
+              traceIfFalse "state in dispute does not belong to this channel" (channelId (state outputDatum) == cID),
+              -- check that the channel funding is maintained. This also checks the integrity of the channel script
+              traceIfFalse "wrong output value" correctChannelValue,
+              -- check that the channel parameters stay the same
+              traceIfFalse "channel parameters differ" (channelParameters oldDatum == channelParameters outputDatum),
+              -- check that the time in the output datum is set properly
+              traceIfFalse "invalid time in output datum" (allowedValidRangeSize && outputTimeInValidRange),
+              -- check that the channel is marked as disputed
+              traceIfFalse "failed to mark channel as disputed" (disputed outputDatum)
+            ]
       -- Close Case:
       MkClose st ->
         traceIfFalse "wrong input value" correctInputValue &&
         traceIfFalse "old state must be funded" (funded oldDatum) &&
-        let newState = extractVerifiedState st (pSigningPKs $ channelParameters oldDatum)
-         in traceIfFalse "Closing state does not belong to this channel" (cID == channelId newState) &&
-                -- check that the state is final
-                traceIfFalse "The closing state is not final" (final newState) &&
-                -- check that A receives their balance
-                traceIfFalse "A party did not get their balance" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (balances newState)))
+        let newState = extractVerifiedState st (pSigningPKs $ channelParameters oldDatum) in 
+          traceIfFalse "Closing state does not belong to this channel" (cID == channelId newState) &&
+          -- check that the state is final
+          traceIfFalse "The closing state is not final" (final newState) &&
+          -- check that A receives their balance
+          traceIfFalse "A party did not get their balance" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (balances newState)))
       -- ForceClose Case:
       ForceClose ->
-        traceIfFalse "old state must be funded" (funded oldDatum) &&
         traceIfFalse "wrong input value" correctInputValue &&
-         -- check that there was a prior dispute
-            traceIfFalse "try to force close without prior dispute" (disputed oldDatum) &&
-            -- check that the relative time-lock is past
-            traceIfFalse "too early" correctForceCloseSlotRange &&
-            -- check that A receives their balance
-            traceIfFalse "A party did not get their balance" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (balances oldState)))
+        traceIfFalse "old state must be funded" (funded oldDatum) &&
+        -- check that there was a prior dispute
+        traceIfFalse "try to force close without prior dispute" (disputed oldDatum) &&
+        -- check that the relative time-lock is past
+        traceIfFalse "too early" correctForceCloseSlotRange &&
+        -- check that A receives their balance
+        traceIfFalse "A party did not get their balance" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (balances oldState)))
   where
     -- | The out-scripts view of the transaction body of the consuming transaction
     info :: TxInfo
