@@ -25,6 +25,8 @@ module PerunDummy
   ( Channel (..),
     ChannelState (..),
     SignedState (..),
+    FundParams (..),
+    AbortParams (..),
     OpenParams (..),
     DisputeParams (..),
     CloseParams (..),
@@ -34,6 +36,7 @@ module PerunDummy
     dispute,
     close,
     forceClose,
+    addFunding,
     contract,
     ensureKnownCurrencies,
     printJson,
@@ -209,7 +212,7 @@ verifySignedMessageConstraints' sKey sm = case verifySignedMessageConstraints sK
 mkChannelValidator :: ChannelID -> ChannelDatum -> ChannelAction -> ScriptContext -> Bool
 mkChannelValidator cID oldDatum action ctx =
     case action of
-      Fund -> 
+      Fund ->
         and
           [
             -- can not fund already funded channels
@@ -224,7 +227,7 @@ mkChannelValidator cID oldDatum action ctx =
             -- the channel is funded iff the funding reflects the state in the output datum
             traceIfFalse "funded flag incorrect in output datum" checkFundingStatus
           ]
-      Abort -> 
+      Abort ->
             -- no aborts on funded channels
             traceIfFalse "channel is already funded" (not $ funded oldDatum) &&
             -- check the authenticity of the abort to prevent DOS
@@ -358,14 +361,14 @@ mkChannelValidator cID oldDatum action ctx =
 
     -- Returns true if party h is payed value v in an output of the transaction
     getsValue :: PaymentPubKeyHash -> Integer -> Bool
-    getsValue pkh v =
+    getsValue pkh v = (v == 0) || (
       let [o] =
             [ o'
-              | o' <- txInfoOutputs info,
-                txOutValue o' == Ada.lovelaceValueOf v
+            | o' <- txInfoOutputs info,
+              txOutValue o' == Ada.lovelaceValueOf v
             ]
-        -- FIXME is it a problem to assume empty stake part of address here?
-        in txOutAddress o == pubKeyHashAddress pkh Nothing
+      -- FIXME is it a problem to assume empty stake part of address here?
+      in txOutAddress o == pubKeyHashAddress pkh Nothing)
 
 --
 -- COMPILATION TO PLUTUS CORE
@@ -409,7 +412,7 @@ data OpenParams = OpenParams
   deriving (Generic, ToJSON, FromJSON, ToSchema)
   deriving stock (P.Eq, P.Show)
 
-data FundingParams = FundingParams
+data FundParams = FundParams
   { fpChannelId :: !ChannelID,
     fpIndex :: !Integer
   }
@@ -441,7 +444,10 @@ newtype ForceCloseParams = ForceCloseParams ChannelID
   deriving stock (P.Eq, P.Show)
 
 type ChannelSchema =
-  Endpoint "open" OpenParams
+  Endpoint "start" OpenParams
+    .\/ Endpoint "fund" FundParams
+    .\/ Endpoint "abort" AbortParams
+    .\/ Endpoint "open" OpenParams
     .\/ Endpoint "dispute" DisputeParams
     .\/ Endpoint "close" CloseParams
     .\/ Endpoint "forceClose" ForceCloseParams
@@ -475,14 +481,14 @@ start OpenParams {..} = do
             funded = False,
             disputed = False
           }
-      v = Ada.lovelaceValueOf $ sum spBalances
+      v = Ada.lovelaceValueOf $ head spBalances
       tx = Constraints.mustPayToTheScript d v
   ledgerTx <- submitTxConstraints (typedChannelValidator spChannelId) tx
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $ printf "Started funding for channel %d with parameters %s and value %s" spChannelId (P.show c) (P.show v)
 
-fund :: forall w s. FundingParams -> Contract w s Text ()
-fund FundingParams {..} = do
+fund :: forall w s. FundParams -> Contract w s Text ()
+fund FundParams {..} = do
   (oref, o, d@ChannelDatum {..}) <- findChannel fpChannelId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   -- TODO add more checks before funding
@@ -522,7 +528,6 @@ abort (AbortParams cId) = do
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
         mconcat (zipWith Constraints.mustPayToPubKey (pPaymentPKs channelParameters) (PlutusTx.Prelude.map Ada.lovelaceValueOf funding))
-          <> Constraints.mustValidateIn (from (time + 1 + fromMilliSeconds (DiffMilliSeconds (pTimeLock channelParameters))))
           <> Constraints.mustSpendScriptOutput oref r
   ledgerTx <- submitTxConstraintsWith lookups tx
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
@@ -687,14 +692,17 @@ findChannel cID = do
 
 addFunding :: Integer -> Integer -> [Integer] -> [Integer]
 addFunding amount index f = let (start, end) = genericSplitAt index f in
-                              start ++ amount:genericDrop 1 end
+                              start ++ amount:genericDrop (1 :: Integer) end
 
 --
 -- Top-level contract, exposing all endpoints.
 --
 contract :: Contract () ChannelSchema Text ()
-contract = selectList [open', dispute', close', forceClose'] >> contract
+contract = selectList [start', fund', abort', open', dispute', close', forceClose'] >> contract
   where
+    start' = endpoint @"start" start
+    fund' = endpoint @"fund" fund
+    abort' = endpoint @"abort" abort
     open' = endpoint @"open" open
     dispute' = endpoint @"dispute" dispute
     close' = endpoint @"close" close
