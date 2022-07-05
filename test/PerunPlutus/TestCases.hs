@@ -48,7 +48,7 @@ honestPaymentTest (wa, wb, wf) = do
   action $ Close wb [wa, wb] cid
 
 
--- | sigleDisputeTest test scenario:
+-- | singleDisputeTest test scenario:
 -- | a third party opens a channel between A and B,
 -- | A issues a payment to B,
 -- | B wants to close the channel, but A does not answer 
@@ -72,7 +72,7 @@ singleDisputeTest (wa, wb, wf) = do
 
 
 -- | maliciousDisputeTest test scenario:
--- | a thirtd party opens a channel between A and B,
+-- | a third party opens a channel between A and B,
 -- | A issues a payment to B (-> State 1),
 -- | A issues another payment to B (-> State 2),
 -- | A maliciously disputes with the outdated State 1
