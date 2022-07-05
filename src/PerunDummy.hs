@@ -231,7 +231,7 @@ mkChannelValidator cID oldDatum action ctx =
         -- no aborts on funded channels
         traceIfFalse "channel is already funded" (not $ funded oldDatum) &&
         -- check the authenticity of the abort to prevent DOS
-        traceIfFalse "abort must be issued by channel participant" (or (PlutusTx.Prelude.map (txSignedBy info . unPaymentPubKeyHash) (pPaymentPKs $ channelParameters oldDatum))) &&
+        traceIfFalse "abort must be issued by channel participant" (any (txSignedBy info . unPaymentPubKeyHash) (pPaymentPKs $ channelParameters oldDatum)) &&
         -- check that every party gets their funding refunded
         traceIfFalse "A party was not reimbursed correctly for their funding" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (funding oldDatum)))
       -- Dispute Case:
