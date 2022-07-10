@@ -28,6 +28,7 @@ module Perun.Onchain
     isValidStateTransition,
     extractVerifiedState,
     defaultValidMsRange,
+    defaultValidMsRangeSkew,
     printJson,
     printSchemas,
     stage,
@@ -142,6 +143,9 @@ instance Scripts.ValidatorTypes ChannelTypes where
 
 defaultValidMsRange :: POSIXTime
 defaultValidMsRange = 10000
+
+defaultValidMsRangeSkew :: POSIXTime
+defaultValidMsRangeSkew = 1000
 
 -- | Returns true, iff the new state is a valid post-state of the old channel state.
 -- | A valid state transition must retain the channelId and the sum of the balances.

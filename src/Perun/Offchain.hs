@@ -17,19 +17,15 @@ module Perun.Offchain where
 
 import Control.Monad hiding (fmap)
 import Data.Aeson (FromJSON, ToJSON)
-import Data.Data
-import Data.List (genericDrop, genericSplitAt)
-import Data.Map as Map
+import Data.List (genericSplitAt)
+import Data.Map as Map hiding (drop, map)
 import Data.Text (Text, pack)
 import GHC.Generics (Generic)
 import Ledger hiding (singleton)
 import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
-import qualified Ledger.Typed.Scripts as Scripts
 import Perun.Onchain
-import Playground.Contract (ensureKnownCurrencies, printJson, printSchemas, stage)
 import Plutus.Contract
-import Plutus.Contract.Oracle (SignedMessage, verifySignedMessageConstraints)
 import qualified PlutusTx
 import PlutusTx.Prelude hiding (unless)
 import Schema (ToSchema)
@@ -332,7 +328,7 @@ findChannel cID = do
 addFunding :: Integer -> Integer -> [Integer] -> [Integer]
 addFunding amount index f =
   let (start, end) = genericSplitAt index f
-   in start ++ amount : drop 1 end
+   in start ++ amount : P.drop 1 end
 
 --
 -- Top-level contract, exposing all endpoints.
