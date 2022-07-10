@@ -5,4 +5,4 @@ import PerunPlutus.TestCases
 import Control.Monad (void)
 
 main :: IO ()
-main = void runPerunDummyTests
+main = void runPerunTests
