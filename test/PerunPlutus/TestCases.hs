@@ -2,11 +2,11 @@
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module PerunPlutus.TestCases (runPerunDummyTests) where
+module PerunPlutus.TestCases (runPerunTests) where
 
 import Data.Functor ((<&>))
-import PerunDummy
-import PerunPlutus.PerunDummySpec
+import Perun hiding (ChannelAction(..))
+import PerunPlutus.PerunSpec
 import Plutus.Contract.Test
 import Plutus.Contract.Test.ContractModel
 import Test.QuickCheck
@@ -206,34 +206,34 @@ aPaysB :: ChannelState -> Integer -> DL PerunModel ChannelState
 aPaysB cs@(ChannelState _ balances v _) delta =
   return cs {balances = [head balances - delta, balances!!1 + delta] ++ tail (tail balances), version = v + 1}
 
-propPerunDummy :: Actions PerunModel -> Property
-propPerunDummy = propRunActions_
+propPerun:: Actions PerunModel -> Property
+propPerun = propRunActions_
 
 prop_HonestPaymentTest :: Property
-prop_HonestPaymentTest = withMaxSuccess 1 $ forAllDL (honestPaymentTest (w1, w2, w3)) propPerunDummy
+prop_HonestPaymentTest = withMaxSuccess 1 $ forAllDL (honestPaymentTest (w1, w2, w3)) propPerun
 
 prop_SingleDisputeTest :: Property
-prop_SingleDisputeTest = withMaxSuccess 1 $ forAllDL (singleDisputeTest (w1, w2, w3)) propPerunDummy
+prop_SingleDisputeTest = withMaxSuccess 1 $ forAllDL (singleDisputeTest (w1, w2, w3)) propPerun
 
 prop_MaliciousDisputeTest :: Property
-prop_MaliciousDisputeTest = withMaxSuccess 1 $ forAllDL (maliciousDisputeTest (w1, w2, w3)) propPerunDummy
+prop_MaliciousDisputeTest = withMaxSuccess 1 $ forAllDL (maliciousDisputeTest (w1, w2, w3)) propPerun
 
 prop_TwoPartyFundingAndPaymentTest :: Property
-prop_TwoPartyFundingAndPaymentTest = withMaxSuccess 1 $ forAllDL (twoPartyFundingAndPaymentTest (w1, w2)) propPerunDummy
+prop_TwoPartyFundingAndPaymentTest = withMaxSuccess 1 $ forAllDL (twoPartyFundingAndPaymentTest (w1, w2)) propPerun
 
 prop_TwoPartyFundingAbortTest :: Property
-prop_TwoPartyFundingAbortTest = withMaxSuccess 1 $ forAllDL (twoPartyFundingAndPaymentTest (w1, w2)) propPerunDummy
+prop_TwoPartyFundingAbortTest = withMaxSuccess 1 $ forAllDL (twoPartyFundingAndPaymentTest (w1, w2)) propPerun
 
 prop_ThreePartyFundingAndPaymentTest :: Property
-prop_ThreePartyFundingAndPaymentTest = withMaxSuccess 1 $ forAllDL (threePartyFundingAndPaymentTest (w1, w2, w3)) propPerunDummy
+prop_ThreePartyFundingAndPaymentTest = withMaxSuccess 1 $ forAllDL (threePartyFundingAndPaymentTest (w1, w2, w3)) propPerun
 
 prop_ThreePartyFundingAbortTest :: Property
-prop_ThreePartyFundingAbortTest = withMaxSuccess 1 $ forAllDL (threePartyFundingAbortTest (w1, w2, w3)) propPerunDummy
+prop_ThreePartyFundingAbortTest = withMaxSuccess 1 $ forAllDL (threePartyFundingAbortTest (w1, w2, w3)) propPerun
 
 
 return [] -- <- Needed for TemplateHaskell to do some magic and find the property tests.
 
 -- NOTE: Automatically discovered properties are functions of type `Property`
 -- having a `prop_` prefix!
-runPerunDummyTests :: IO Bool
-runPerunDummyTests = $quickCheckAll
+runPerunTests :: IO Bool
+runPerunTests = $quickCheckAll

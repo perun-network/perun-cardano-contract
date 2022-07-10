@@ -41,7 +41,9 @@ common shared
 
 library
     import: shared
-    exposed-modules:  PerunDummy
+    exposed-modules: Perun
+                   , Perun.Onchain
+                   , Perun.Offchain
 
     -- Modules included in this library but not exported.
     -- other-modules:
@@ -74,7 +76,7 @@ test-suite perun-plutus-test
                       -rtsopts
                       -with-rtsopts=-N
                       -fno-warn-type-defaults
-  other-modules:      PerunPlutus.PerunDummySpec
+  other-modules:      PerunPlutus.PerunSpec
                     , PerunPlutus.TestCases
   build-depends:      hspec
                     , hspec-expectations
