@@ -20,8 +20,9 @@ import qualified Ledger.Ada as Ada
 import Ledger.Address
 import qualified Ledger.Value as Value
 import Perun hiding (ChannelAction (..))
+import PerunPlutus.Test.MockContract
 import Plutus.Contract.Oracle
-import Plutus.Contract.Test (Wallet, mockWalletPaymentPubKey, mockWalletPaymentPubKeyHash, w1, w2, w3)
+import Plutus.Contract.Test (Wallet, mockWalletPaymentPubKey, mockWalletPaymentPubKeyHash, w1, w2, w3, w4)
 import Plutus.Contract.Test.ContractModel
 import qualified Plutus.Trace.Emulator as Trace
 import qualified Wallet.Emulator.Wallet as Trace
@@ -33,6 +34,9 @@ import qualified Prelude as P
 
 wallets :: [Wallet]
 wallets = [w1, w2, w3]
+
+adversaryWallets :: [Wallet]
+adversaryWallets = [w4]
 
 exVal :: Value.Value
 exVal = Ada.lovelaceValueOf 1
@@ -83,12 +87,15 @@ instance ContractModel PerunModel where
     -- `ContractInstanceKey` with a single constructor distinguished by the
     -- wallet they are running in.
     Participant :: Wallet -> ContractInstanceKey PerunModel () ChannelSchema Text ()
+    Adversary :: Wallet -> ContractInstanceKey PerunModel () MockSchema Text ()
 
-  initialInstances = (`StartContract` ()) . Participant <$> wallets
+  initialInstances = ((`StartContract` ()) . Participant <$> wallets) ++ ((`StartContract` ()) . Adversary <$> wallets)
 
   instanceContract _ Participant {} _ = contract
+  instanceContract _ Adversary {} _ = mockContract
 
   instanceWallet (Participant w) = w
+  instanceWallet (Adversary w) = w
 
   arbitraryAction _ = P.undefined
 
