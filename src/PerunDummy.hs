@@ -174,11 +174,18 @@ isValidStateTransition old new =
     && version old < version new
     && not (final old)
 
--- | pls work
+-- | Given a signed state and a list of public keys this returns the channel state `s`,
+-- | iff the signed state consists of exactly one valid signature on `s` for every given
+-- | public key in the correct order. It throws an error otherwise.
 {-# INLINEABLE extractVerifiedState #-}
 extractVerifiedState :: SignedState -> [PaymentPubKey] -> ChannelState
 extractVerifiedState (SignedState sigs) signingKeys =
-  let states = zipWith verifySignedMessageConstraints' signingKeys sigs
+  let states =
+        zipWithEqualLength
+          verifySignedMessageConstraints'
+          signingKeys
+          sigs
+          "list of signature and list of keys have different lengths"
    in if and $ PlutusTx.Prelude.map (== head states) (tail states)
         then
           ( case head states of
@@ -187,14 +194,17 @@ extractVerifiedState (SignedState sigs) signingKeys =
           )
         else traceError "invalidSignatures"
 
--- | Checks all signatures on the given SignedState under the given public keys
--- | and returns the corresponding ChannelState if all signatures are valid on
--- | the same ChannelState.
--- {-# INLINEABLE extractVerifiedState #-}
--- extractVerifiedState :: SignedState -> (PaymentPubKey, PaymentPubKey) -> ChannelState
--- extractVerifiedState (SignedState smA smB) (pkA, pkB) = case (verifySignedMessageConstraints' pkA smA, verifySignedMessageConstraints' pkB smB) of
---  (Right (sa, _), Right (sb, _)) -> if sa == sb then sa else traceError "signatures on different states"
---  _ -> traceError "invalid signatures"
+-- TODO use `zipWithEqualLength` wherever it is more appropriate than `zipWith`
+
+-- | This performs `zipWith` on the first three arguments, iff both lists are of equal length
+-- | and throws an error with the given message otherwise.
+{-# INLINEABLE zipWithEqualLength #-}
+zipWithEqualLength :: forall a b c. (a -> b -> c) -> [a] -> [b] -> BuiltinString -> [c]
+zipWithEqualLength f lstA lstB msg =
+  if length lstA == length lstB
+    then zipWith f lstA lstB
+    else traceError msg
+
 {-# INLINEABLE verifySignedMessageConstraints' #-}
 verifySignedMessageConstraints' :: PaymentPubKey -> SignedMessage ChannelState -> Maybe ChannelState
 verifySignedMessageConstraints' sKey sm = case verifySignedMessageConstraints sKey sm of
@@ -210,34 +220,36 @@ verifySignedMessageConstraints' sKey sm = case verifySignedMessageConstraints sK
 {-# INLINEABLE mkChannelValidator #-}
 mkChannelValidator :: ChannelID -> ChannelDatum -> ChannelAction -> ScriptContext -> Bool
 mkChannelValidator cID oldDatum action ctx =
-    case action of
-      Fund ->
-        and
-          [
-            -- can not fund already funded channels
-            traceIfFalse "channel is already funded" (not $ funded oldDatum),
-            -- check that the new funding state sums up to the value of the script inputs
-            traceIfFalse "value of script output does not reflect funding" (correctInputFunding && correctChannelFunding),
-            -- check that every funding value increases monotonously
-            traceIfFalse "invalid funding" (all (== True) (zipWith (<=) (funding oldDatum) (funding outputDatum))),
-            -- check that parameters, state, time stay the same, disputed == false
-            traceIfFalse "violated channel integrity" channelIntegrityAtFunding,
-            -- check that the channel is marked as funded iff it is actually funded
-            -- the channel is funded iff the funding reflects the state in the output datum
-            traceIfFalse "funded flag incorrect in output datum" checkFundingStatus
-          ]
-      Abort ->
-        traceIfFalse "wrong input funding" correctInputFunding &&
+  case action of
+    Fund ->
+      and
+        [ -- can not fund already funded channels
+          traceIfFalse "channel is already funded" (not $ funded oldDatum),
+          -- check that the new funding state sums up to the value of the script inputs
+          traceIfFalse "value of script output does not reflect funding" (correctInputFunding && correctChannelFunding),
+          -- check that every funding value increases monotonously
+          traceIfFalse "invalid funding" (all (== True) (zipWith (<=) (funding oldDatum) (funding outputDatum))),
+          -- check that parameters, state, time stay the same, disputed == false
+          traceIfFalse "violated channel integrity" channelIntegrityAtFunding,
+          -- check that the channel is marked as funded iff it is actually funded
+          -- the channel is funded iff the funding reflects the state in the output datum
+          traceIfFalse "funded flag incorrect in output datum" checkFundingStatus
+        ]
+    Abort ->
+      traceIfFalse "wrong input funding" correctInputFunding
+        &&
         -- no aborts on funded channels
-        traceIfFalse "channel is already funded" (not $ funded oldDatum) &&
+        traceIfFalse "channel is already funded" (not $ funded oldDatum)
+        &&
         -- check the authenticity of the abort to prevent DOS
-        traceIfFalse "abort must be issued by channel participant" (any (txSignedBy info . unPaymentPubKeyHash) (pPaymentPKs $ channelParameters oldDatum)) &&
+        traceIfFalse "abort must be issued by channel participant" (any (txSignedBy info . unPaymentPubKeyHash) (pPaymentPKs $ channelParameters oldDatum))
+        &&
         -- check that every party gets their funding refunded
         traceIfFalse "A party was not reimbursed correctly for their funding" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (funding oldDatum)))
-      -- Dispute Case:
-      MkDispute st ->
-        let newState = extractVerifiedState st (pSigningPKs $ channelParameters oldDatum) in 
-          and
+    -- Dispute Case:
+    MkDispute st ->
+      let newState = extractVerifiedState st (pSigningPKs $ channelParameters oldDatum)
+       in and
             [ traceIfFalse "wrong input value" correctInputValue,
               traceIfFalse "old state must be funded" (funded oldDatum),
               traceIfFalse "new state must be funded" (funded outputDatum),
@@ -256,24 +268,29 @@ mkChannelValidator cID oldDatum action ctx =
               -- check that the channel is marked as disputed
               traceIfFalse "failed to mark channel as disputed" (disputed outputDatum)
             ]
-      -- Close Case:
-      MkClose st ->
-        traceIfFalse "wrong input value" correctInputValue &&
-        traceIfFalse "old state must be funded" (funded oldDatum) &&
-        let newState = extractVerifiedState st (pSigningPKs $ channelParameters oldDatum) in 
-          traceIfFalse "Closing state does not belong to this channel" (cID == channelId newState) &&
-          -- check that the state is final
-          traceIfFalse "The closing state is not final" (final newState) &&
-          -- check that A receives their balance
-          traceIfFalse "A party did not get their balance" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (balances newState)))
-      -- ForceClose Case:
-      ForceClose ->
-        traceIfFalse "wrong input value" correctInputValue &&
-        traceIfFalse "old state must be funded" (funded oldDatum) &&
+    -- Close Case:
+    MkClose st ->
+      traceIfFalse "wrong input value" correctInputValue
+        && traceIfFalse "old state must be funded" (funded oldDatum)
+        && let newState = extractVerifiedState st (pSigningPKs $ channelParameters oldDatum)
+            in traceIfFalse "Closing state does not belong to this channel" (cID == channelId newState)
+                 &&
+                 -- check that the state is final
+                 traceIfFalse "The closing state is not final" (final newState)
+                 &&
+                 -- check that A receives their balance
+                 traceIfFalse "A party did not get their balance" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (balances newState)))
+    -- ForceClose Case:
+    ForceClose ->
+      traceIfFalse "wrong input value" correctInputValue
+        && traceIfFalse "old state must be funded" (funded oldDatum)
+        &&
         -- check that there was a prior dispute
-        traceIfFalse "try to force close without prior dispute" (disputed oldDatum) &&
+        traceIfFalse "try to force close without prior dispute" (disputed oldDatum)
+        &&
         -- check that the relative time-lock is past
-        traceIfFalse "too early" correctForceCloseSlotRange &&
+        traceIfFalse "too early" correctForceCloseSlotRange
+        &&
         -- check that A receives their balance
         traceIfFalse "A party did not get their balance" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (balances oldState)))
   where
@@ -358,14 +375,16 @@ mkChannelValidator cID oldDatum action ctx =
 
     -- Returns true if party h is payed value v in an output of the transaction
     getsValue :: PaymentPubKeyHash -> Integer -> Bool
-    getsValue pkh v = (v == 0) || (
-      let [o] =
-            [ o'
-            | o' <- txInfoOutputs info,
-              txOutValue o' == Ada.lovelaceValueOf v
-            ]
-      -- FIXME is it a problem to assume empty stake part of address here?
-      in txOutAddress o == pubKeyHashAddress pkh Nothing)
+    getsValue pkh v =
+      (v == 0)
+        || ( let [o] =
+                   [ o'
+                     | o' <- txInfoOutputs info,
+                       txOutValue o' == Ada.lovelaceValueOf v
+                   ]
+              in -- FIXME is it a problem to assume empty stake part of address here?
+                 txOutAddress o == pubKeyHashAddress pkh Nothing
+           )
 
 --
 -- COMPILATION TO PLUTUS CORE
@@ -676,8 +695,9 @@ findChannel cID = do
     _ -> throwError "channel utxo not found"
 
 addFunding :: Integer -> Integer -> [Integer] -> [Integer]
-addFunding amount index f = let (start, end) = genericSplitAt index f in
-                              start ++ amount:genericDrop (1 :: Integer) end
+addFunding amount index f =
+  let (start, end) = genericSplitAt index f
+   in start ++ amount : genericDrop (1 :: Integer) end
 
 --
 -- Top-level contract, exposing all endpoints.
