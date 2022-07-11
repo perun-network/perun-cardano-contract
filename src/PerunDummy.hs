@@ -15,7 +15,6 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE NoImplicitPrelude #-}
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Use &&" #-}
 
 --
@@ -51,7 +50,7 @@ where
 import Control.Monad hiding (fmap)
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Data
-import Data.Map as Map
+import Data.Map as Map hiding (drop, keys)
 import Data.Text (Text, pack)
 import GHC.Generics (Generic)
 import Ledger hiding (singleton)
@@ -66,7 +65,7 @@ import Schema (ToSchema)
 import Text.Printf (printf)
 import qualified Prelude as P
 import Plutus.Contract.Oracle (SignedMessage, verifySignedMessageConstraints)
-import Data.List (genericSplitAt, genericDrop)
+import Data.List (drop, genericSplitAt)
 
 --
 --
@@ -201,6 +200,8 @@ zipWithEqualLength f lstA lstB msg = if length lstA == length lstB then
     traceError msg
 
 
+-- | This returns `Just s`, iff the signature on the channel state `s`
+-- | is valid under the given public key and `Nothing` otherwise.
 {-# INLINEABLE verifySignedMessageConstraints' #-}
 verifySignedMessageConstraints' :: PaymentPubKey -> SignedMessage ChannelState -> Maybe ChannelState
 verifySignedMessageConstraints' sKey sm = case verifySignedMessageConstraints sKey sm of
@@ -233,16 +234,19 @@ mkChannelValidator cID oldDatum action ctx =
             traceIfFalse "funded flag incorrect in output datum" checkFundingStatus
           ]
       Abort ->
-        traceIfFalse "wrong input funding" correctInputFunding &&
-        -- no aborts on funded channels
-        traceIfFalse "channel is already funded" (not $ funded oldDatum) &&
-        -- check the authenticity of the abort to prevent DOS
-        traceIfFalse "abort must be issued by channel participant" (any (txSignedBy info . unPaymentPubKeyHash) (pPaymentPKs $ channelParameters oldDatum)) &&
-        -- check that every party gets their funding refunded
-        traceIfFalse "A party was not reimbursed correctly for their funding" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (funding oldDatum)))
+        and
+          [
+            traceIfFalse "wrong input funding" correctInputFunding,
+            -- no aborts on funded channels
+            traceIfFalse "channel is already funded" (not $ funded oldDatum),
+            -- check the authenticity of the abort to prevent DOS
+            traceIfFalse "abort must be issued by channel participant" (any (txSignedBy info . unPaymentPubKeyHash) (pPaymentPKs $ channelParameters oldDatum)),
+            -- check that every party gets their funding refunded
+            traceIfFalse "A party was not reimbursed correctly for their funding" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (funding oldDatum)))
+          ]
       -- Dispute Case:
       MkDispute st ->
-        let newState = extractVerifiedState st (pSigningPKs $ channelParameters oldDatum) in 
+        let newState = extractVerifiedState st (pSigningPKs $ channelParameters oldDatum) in
           and
             [ traceIfFalse "wrong input value" correctInputValue,
               traceIfFalse "old state must be funded" (funded oldDatum),
@@ -264,24 +268,30 @@ mkChannelValidator cID oldDatum action ctx =
             ]
       -- Close Case:
       MkClose st ->
-        traceIfFalse "wrong input value" correctInputValue &&
-        traceIfFalse "old state must be funded" (funded oldDatum) &&
-        let newState = extractVerifiedState st (pSigningPKs $ channelParameters oldDatum) in 
-          traceIfFalse "Closing state does not belong to this channel" (cID == channelId newState) &&
-          -- check that the state is final
-          traceIfFalse "The closing state is not final" (final newState) &&
-          -- check that A receives their balance
-          traceIfFalse "A party did not get their balance" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (balances newState)))
+        let newState = extractVerifiedState st (pSigningPKs $ channelParameters oldDatum) in
+          and
+            [
+              traceIfFalse "wrong input value" correctInputValue,
+              traceIfFalse "old state must be funded" (funded oldDatum),
+              traceIfFalse "Closing state does not belong to this channel" (cID == channelId newState),
+              -- check that the state is final
+              traceIfFalse "The closing state is not final" (final newState),
+              -- check that A receives their balance
+              traceIfFalse "A party did not get their balance" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (balances newState)))
+            ]
       -- ForceClose Case:
       ForceClose ->
-        traceIfFalse "wrong input value" correctInputValue &&
-        traceIfFalse "old state must be funded" (funded oldDatum) &&
-        -- check that there was a prior dispute
-        traceIfFalse "try to force close without prior dispute" (disputed oldDatum) &&
-        -- check that the relative time-lock is past
-        traceIfFalse "too early" correctForceCloseSlotRange &&
-        -- check that A receives their balance
-        traceIfFalse "A party did not get their balance" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (balances oldState)))
+        and
+          [
+            traceIfFalse "wrong input value" correctInputValue,
+            traceIfFalse "old state must be funded" (funded oldDatum),
+            -- check that there was a prior dispute
+            traceIfFalse "try to force close without prior dispute" (disputed oldDatum),
+            -- check that the relative time-lock is past
+            traceIfFalse "too early" correctForceCloseSlotRange,
+            -- check that A receives their balance
+            traceIfFalse "A party did not get their balance" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (balances oldState)))
+          ]
   where
     -- | The out-scripts view of the transaction body of the consuming transaction
     info :: TxInfo
@@ -494,7 +504,7 @@ start OpenParams {..} = do
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $ printf "Started funding for channel %d with parameters %s and value %s" spChannelId (P.show c) (P.show v)
 
-fund :: forall w s. FundParams -> Contract w s Text ()
+fund :: FundParams -> Contract w s Text ()
 fund FundParams {..} = do
   (oref, o, d@ChannelDatum {..}) <- findChannel fpChannelId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
@@ -502,6 +512,8 @@ fund FundParams {..} = do
   when funded $
     throwError $ pack $ printf "can only fund channel that is not already funded"
   let
+      -- TODO avoid using list-indexing with !!
+      --      try to use fixed-sized arrays instead
       newFunding = addFunding (balances state!!fpIndex) fpIndex funding
       newDatum =
         d
@@ -520,9 +532,11 @@ fund FundParams {..} = do
           <> Constraints.mustSpendScriptOutput oref r
   ledgerTx <- submitTxConstraintsWith lookups tx
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
+  -- TODO avoid using list-indexing with !!
+  --      try to use fixed-sized arrays instead
   logInfo @P.String $ printf "Funded %d Lovelace for party %d on channel %d" (balances state!!fpIndex) fpIndex fpChannelId
 
-abort :: forall w s. AbortParams -> Contract w s Text ()
+abort :: AbortParams -> Contract w s Text ()
 abort (AbortParams cId) = do
   (oref, o, d@ChannelDatum {..}) <- findChannel cId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
@@ -582,7 +596,7 @@ open OpenParams {..} = do
 -- dispute logic
 --
 
-dispute :: forall w s. DisputeParams -> Contract w s Text ()
+dispute :: DisputeParams -> Contract w s Text ()
 dispute (DisputeParams keys sst) = do
   let
     dState = extractVerifiedState sst keys
@@ -619,7 +633,7 @@ dispute (DisputeParams keys sst) = do
 -- close logic
 --
 
-close :: forall w s. CloseParams -> Contract w s Text ()
+close :: CloseParams -> Contract w s Text ()
 close (CloseParams keys sst) = do
   let
     s@ChannelState{..} = extractVerifiedState sst keys
@@ -653,7 +667,7 @@ close (CloseParams keys sst) = do
 -- close logic
 --
 
-forceClose :: forall w s. ForceCloseParams -> Contract w s Text ()
+forceClose :: ForceCloseParams -> Contract w s Text ()
 forceClose (ForceCloseParams cId) = do
   (oref, o, d@ChannelDatum {..}) <- findChannel cId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
@@ -699,7 +713,7 @@ findChannel cID = do
 
 addFunding :: Integer -> Integer -> [Integer] -> [Integer]
 addFunding amount index f = let (start, end) = genericSplitAt index f in
-                              start ++ amount:genericDrop (1 :: Integer) end
+                              start ++ amount:drop 1 end
 
 --
 -- Top-level contract, exposing all endpoints.

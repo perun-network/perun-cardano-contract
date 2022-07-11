@@ -15,10 +15,9 @@
 
 module PerunPlutus.PerunDummySpec where
 
-import Control.Lens hiding (both)
+import Control.Lens
 import Data.Data
 import Data.Text (Text)
-import Data.Tuple.Extra (both)
 import qualified Ledger.Ada as Ada
 import Ledger.Address
 import qualified Ledger.Value as Value
@@ -29,8 +28,6 @@ import Plutus.Contract.Test.ContractModel
 import qualified Plutus.Trace.Emulator as Trace
 import qualified Wallet.Emulator.Wallet as Trace
 import Control.Monad
-import qualified Plutus.V1.Ledger.Ada as Ada
-import Plutus.Contract.Test.ContractModel (getContractState)
 import PlutusTx.Prelude hiding (unless, mapM)
 import qualified Prelude as P
 
@@ -121,11 +118,11 @@ instance ContractModel PerunModel where
         )
     withdraw (head parties) $ Ada.lovelaceValueOf $ head startBalances
     wait 1
-  nextState (Fund funder index cid) = do
+  nextState (Fund funder index _) = do
     modifyContractState (\case
         PerunModel Nothing -> P.error "Funding only works on existing channels"
         PerunModel (Just (_, _, _, True)) -> P.error "Funding only works on unfunded channels"
-        PerunModel (Just (cs, tl, oldFunding, oldFunded)) ->
+        PerunModel (Just (cs, tl, oldFunding, _)) ->
           let newFunding = addFunding (balances cs!!index) index oldFunding in
           PerunModel
             ( Just
@@ -138,7 +135,7 @@ instance ContractModel PerunModel where
         _ -> P.error "unable to read contract state"
     withdraw funder $ Ada.lovelaceValueOf (balances s!!index)
     wait 1
-  nextState (Abort issuer parties cid) = do
+  nextState (Abort _ parties _) = do
     funding <-
       getContractState >>= \case
         PerunModel (Just (_, _, f, False)) -> return f
@@ -241,7 +238,7 @@ instance ContractModel PerunModel where
             (SignedState (map (signMessage' state) sks))
         )
       delay 1
-    (Close issuer parties cid) -> do
+    (Close issuer parties _) -> do
       let cs = s ^. contractState
       chan <- case cs of
         PerunModel Nothing -> Trace.throwError . Trace.GenericError $ "no channel to close"
