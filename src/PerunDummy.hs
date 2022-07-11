@@ -50,7 +50,7 @@ where
 import Control.Monad hiding (fmap)
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Data
-import Data.Map as Map hiding (drop, keys)
+import Data.Map as Map hiding (drop, map, keys)
 import Data.Text (Text, pack)
 import GHC.Generics (Generic)
 import Ledger hiding (singleton)
@@ -77,6 +77,9 @@ type ChannelID = Integer
 
 defaultValidMsRange :: POSIXTime
 defaultValidMsRange = 10000
+
+defaultValidMsRangeSkew :: POSIXTime
+defaultValidMsRangeSkew = 1000
 
 -- Parameters of the channel
 data Channel = Channel
@@ -182,7 +185,7 @@ extractVerifiedState (SignedState sigs) signingKeys =
   let
     states = zipWithEqualLength verifySignedMessageConstraints' signingKeys sigs
       "list of signature and list of keys have different lengths" in
-  if and $ PlutusTx.Prelude.map (== head states) (tail states) then
+  if all (== head states) (tail states) then
     (case head states of
       Just s -> s
       Nothing -> traceError "invalid signatures") else
@@ -494,14 +497,14 @@ start OpenParams {..} = do
           { channelParameters = c,
             state = s,
             time = t,
-            funding = head spBalances : tail (PlutusTx.Prelude.map (const 0) spBalances),
+            funding = head spBalances : tail (map (const 0) spBalances),
             funded = False,
             disputed = False
           }
       v = Ada.lovelaceValueOf $ head spBalances
       tx = Constraints.mustPayToTheScript d v
   ledgerTx <- submitTxConstraints (typedChannelValidator spChannelId) tx
-  void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
+  void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $ printf "Started funding for channel %d with parameters %s and value %s" spChannelId (P.show c) (P.show v)
 
 fund :: FundParams -> Contract w s Text ()
@@ -509,8 +512,7 @@ fund FundParams {..} = do
   (oref, o, d@ChannelDatum {..}) <- findChannel fpChannelId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   -- TODO add more checks before funding
-  when funded $
-    throwError $ pack $ printf "can only fund channel that is not already funded"
+  when funded . throwError . pack $ printf "can only fund channel that is not already funded"
   let
       -- TODO avoid using list-indexing with !!
       --      try to use fixed-sized arrays instead
@@ -520,8 +522,8 @@ fund FundParams {..} = do
           { funding = newFunding,
             funded = newFunding == balances state
           }
-      v = Ada.lovelaceValueOf $ sum newFunding
-      r = Redeemer $ PlutusTx.toBuiltinData Fund
+      v = Ada.lovelaceValueOf (sum newFunding)
+      r = Redeemer (PlutusTx.toBuiltinData Fund)
 
       lookups =
         Constraints.typedValidatorLookups (typedChannelValidator fpChannelId)
@@ -531,7 +533,7 @@ fund FundParams {..} = do
         Constraints.mustPayToTheScript newDatum v
           <> Constraints.mustSpendScriptOutput oref r
   ledgerTx <- submitTxConstraintsWith lookups tx
-  void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
+  void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   -- TODO avoid using list-indexing with !!
   --      try to use fixed-sized arrays instead
   logInfo @P.String $ printf "Funded %d Lovelace for party %d on channel %d" (balances state!!fpIndex) fpIndex fpChannelId
@@ -540,18 +542,17 @@ abort :: AbortParams -> Contract w s Text ()
 abort (AbortParams cId) = do
   (oref, o, d@ChannelDatum {..}) <- findChannel cId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
-  when funded $
-    throwError $ pack $ printf "can not abort funded channel"
-  let r = Redeemer $ PlutusTx.toBuiltinData Abort
+  when funded . throwError . pack $ printf "can not abort funded channel"
+  let r = Redeemer (PlutusTx.toBuiltinData Abort)
       lookups =
         Constraints.typedValidatorLookups (typedChannelValidator cId)
           P.<> Constraints.otherScript (channelValidator cId)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
-        mconcat (zipWith Constraints.mustPayToPubKey (pPaymentPKs channelParameters) (PlutusTx.Prelude.map Ada.lovelaceValueOf funding))
+        mconcat (zipWith Constraints.mustPayToPubKey (pPaymentPKs channelParameters) (map Ada.lovelaceValueOf funding))
           <> Constraints.mustSpendScriptOutput oref r
   ledgerTx <- submitTxConstraintsWith lookups tx
-  void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
+  void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $
     printf
       "aborted channel %d with parameters %s. The funding was: %s"
@@ -589,7 +590,7 @@ open OpenParams {..} = do
       v = Ada.lovelaceValueOf $ sum spBalances
       tx = Constraints.mustPayToTheScript d v
   ledgerTx <- submitTxConstraints (typedChannelValidator spChannelId) tx
-  void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
+  void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $ printf "Opened channel %d with parameters %s and value %s" spChannelId (P.show c) (P.show v)
 
 --
@@ -603,10 +604,14 @@ dispute (DisputeParams keys sst) = do
   t <- currentTime
   (oref, o, d@ChannelDatum {..}) <- findChannel $ channelId dState
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
-  unless (isValidStateTransition state dState) $
-    throwError $ pack $ printf "state transition in dispute invalid"
-  unless funded $
-    throwError $ pack $ printf "can only dispute on funded state"
+  unless (isValidStateTransition state dState) 
+    . throwError 
+    . pack 
+    $ printf "state transition in dispute invalid"
+  unless funded 
+    . throwError 
+    . pack 
+    $ printf "can only dispute on funded state"
   let
       newDatum =
         d
@@ -614,8 +619,8 @@ dispute (DisputeParams keys sst) = do
             time = t,
             disputed = True
           }
-      v = Ada.lovelaceValueOf $ sum $ balances state
-      r = Redeemer $ PlutusTx.toBuiltinData $ MkDispute sst
+      v = Ada.lovelaceValueOf . sum $ balances state
+      r = Redeemer . PlutusTx.toBuiltinData $ MkDispute sst
 
       lookups =
         Constraints.typedValidatorLookups (typedChannelValidator $ channelId dState)
@@ -623,10 +628,10 @@ dispute (DisputeParams keys sst) = do
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
         Constraints.mustPayToTheScript newDatum v
-          <> Constraints.mustValidateIn (Ledger.intersection (from (t - 1000)) (to (t + defaultValidMsRange - 1000)))
+          <> Constraints.mustValidateIn (Ledger.intersection (from (t - defaultValidMsRangeSkew)) (to (t + defaultValidMsRange - defaultValidMsRangeSkew)))
           <> Constraints.mustSpendScriptOutput oref r
   ledgerTx <- submitTxConstraintsWith lookups tx
-  void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
+  void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $ printf "made dispute of new state %s" (P.show dState)
 
 --
@@ -639,23 +644,20 @@ close (CloseParams keys sst) = do
     s@ChannelState{..} = extractVerifiedState sst keys
   (oref, o, d@ChannelDatum {..}) <- findChannel channelId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
-  unless (isValidStateTransition state s) $
-    throwError $ pack $ printf "state transition invalid"
-  unless final $
-    throwError $ pack $ printf "can not close unless state is final"
-  unless funded $
-    throwError $ pack $ printf "can only close funded state"
+  unless (isValidStateTransition state s) . throwError . pack $ printf "state transition invalid"
+  unless final . throwError . pack $ printf "can not close unless state is final"
+  unless funded . throwError . pack $ printf "can only close funded state"
   let
-    r = Redeemer $ PlutusTx.toBuiltinData $ MkClose sst
+    r = Redeemer . PlutusTx.toBuiltinData $ MkClose sst
     lookups =
       Constraints.typedValidatorLookups (typedChannelValidator channelId)
         P.<> Constraints.otherScript (channelValidator channelId)
         P.<> Constraints.unspentOutputs (Map.singleton oref o)
     tx =
-      mconcat (zipWith Constraints.mustPayToPubKey (pPaymentPKs channelParameters) (PlutusTx.Prelude.map Ada.lovelaceValueOf balances))
+      mconcat (zipWith Constraints.mustPayToPubKey (pPaymentPKs channelParameters) (map Ada.lovelaceValueOf balances))
         <> Constraints.mustSpendScriptOutput oref r
   ledgerTx <- submitTxConstraintsWith lookups tx
-  void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
+  void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $
     printf
       "closed channel %d with params %s. The final balances are: %s"
@@ -671,21 +673,19 @@ forceClose :: ForceCloseParams -> Contract w s Text ()
 forceClose (ForceCloseParams cId) = do
   (oref, o, d@ChannelDatum {..}) <- findChannel cId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
-  unless disputed $
-    throwError $ pack $ printf "channel was never in disputed state"
-  unless funded $
-    throwError $ pack $ printf "can only force-close funded state"
-  let r = Redeemer $ PlutusTx.toBuiltinData ForceClose
+  unless disputed . throwError . pack $ printf "channel was never in disputed state"
+  unless funded . throwError . pack $ printf "can only force-close funded state"
+  let r = Redeemer (PlutusTx.toBuiltinData ForceClose)
       lookups =
         Constraints.typedValidatorLookups (typedChannelValidator cId)
           P.<> Constraints.otherScript (channelValidator cId)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
-        mconcat (zipWith Constraints.mustPayToPubKey (pPaymentPKs channelParameters) (PlutusTx.Prelude.map Ada.lovelaceValueOf (balances state)))
-          <> Constraints.mustValidateIn (from (time + 1 + fromMilliSeconds (DiffMilliSeconds (pTimeLock channelParameters))))
+        mconcat (zipWith Constraints.mustPayToPubKey (pPaymentPKs channelParameters) (map Ada.lovelaceValueOf (balances state)))
+          <> Constraints.mustValidateIn (from $ earliestFirstCloseTime time (pTimeLock channelParameters))
           <> Constraints.mustSpendScriptOutput oref r
   ledgerTx <- submitTxConstraintsWith lookups tx
-  void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
+  void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $
     printf
       "force closed channel %d with parameters %s. The final balances are: %s"
@@ -693,17 +693,19 @@ forceClose (ForceCloseParams cId) = do
       (P.show channelParameters)
       (P.show $ balances state)
 
+-- | Calculates the earliest time a channel can be force-closed for given parameters.
+earliestFirstCloseTime :: POSIXTime -> Integer -> POSIXTime
+earliestFirstCloseTime timeStamp timeLock = timeStamp + POSIXTime timeLock 
+
+
 findChannel ::
   ChannelID ->
   Contract w s Text (TxOutRef, ChainIndexTxOut, ChannelDatum)
 findChannel cID = do
   utxos <- utxosAt $ scriptHashAddress (channelHash cID)
-  let xs =
-        [ (oref, o)
-          | (oref, o) <- Map.toList utxos
-        ]
-  case xs of
-    [(oref, o)] -> case _ciTxOutDatum o of
+  case Map.toList utxos of
+    -- TODO: revise this!
+    (oref, o):_ -> case _ciTxOutDatum o of
       Left _ -> throwError "datum missing"
       Right (Datum e) -> case PlutusTx.fromBuiltinData e of
         Nothing -> throwError "datum has wrong type"
