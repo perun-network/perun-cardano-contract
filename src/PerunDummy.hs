@@ -174,12 +174,15 @@ isValidStateTransition old new =
     && version old < version new
     && not (final old)
 
-
--- | pls work
+-- | Given a signed state and a list of public keys this returns the channel state `s`,
+-- | iff the signed state consists of exactly one valid signature on `s` for every given
+-- | public key in the correct order. It throws an error otherwise.
 {-# INLINEABLE extractVerifiedState #-}
 extractVerifiedState :: SignedState -> [PaymentPubKey] -> ChannelState
 extractVerifiedState (SignedState sigs) signingKeys =
-  let states = zipWith verifySignedMessageConstraints' signingKeys sigs in
+  let
+    states = zipWithEqualLength verifySignedMessageConstraints' signingKeys sigs
+      "list of signature and list of keys have different lengths" in
   if and $ PlutusTx.Prelude.map (== head states) (tail states) then
     (case head states of
       Just s -> s
@@ -187,14 +190,16 @@ extractVerifiedState (SignedState sigs) signingKeys =
         traceError "invalidSignatures"
 
 
--- | Checks all signatures on the given SignedState under the given public keys
--- | and returns the corresponding ChannelState if all signatures are valid on 
--- | the same ChannelState.
---{-# INLINEABLE extractVerifiedState #-}
---extractVerifiedState :: SignedState -> (PaymentPubKey, PaymentPubKey) -> ChannelState
---extractVerifiedState (SignedState smA smB) (pkA, pkB) = case (verifySignedMessageConstraints' pkA smA, verifySignedMessageConstraints' pkB smB) of
---  (Right (sa, _), Right (sb, _)) -> if sa == sb then sa else traceError "signatures on different states"
---  _ -> traceError "invalid signatures"
+-- TODO use `zipWithEqualLength` wherever it is more appropriate than `zipWith`
+
+-- | This performs `zipWith` on the first three arguments, iff both lists are of equal length
+-- | and throws an error with the given message otherwise.
+{-# INLINEABLE zipWithEqualLength #-}
+zipWithEqualLength :: forall a b c. (a -> b -> c) -> [a] -> [b] -> BuiltinString -> [c]
+zipWithEqualLength f lstA lstB msg = if length lstA == length lstB then
+  zipWith f lstA lstB else
+    traceError msg
+
 
 {-# INLINEABLE verifySignedMessageConstraints' #-}
 verifySignedMessageConstraints' :: PaymentPubKey -> SignedMessage ChannelState -> Maybe ChannelState
