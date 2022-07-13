@@ -25,10 +25,8 @@ import Plutus.Contract.Oracle
 import Plutus.Contract.Test (Wallet, mockWalletPaymentPubKey, mockWalletPaymentPubKeyHash, w1, w2, w3, w4)
 import Plutus.Contract.Test.ContractModel
 import qualified Plutus.Trace.Emulator as Trace
-import qualified Wallet.Emulator.Wallet as Trace
-import Control.Monad
-import PlutusTx.Prelude hiding (unless, mapM)
 import qualified Plutus.V1.Ledger.Ada as Ada
+import PlutusTx.Prelude hiding (mapM, unless)
 import qualified Wallet.Emulator.Wallet as Trace
 import qualified Prelude as P
 
@@ -56,28 +54,28 @@ instance ContractModel PerunModel where
    - Only supporting two party channels for now.
   --}
   data Action PerunModel
-    = -- | Start the channel (with insufficient funding)
-      -- | Participants ChanelID Balances Timeloc
+    = -- Start the channel (with insufficient funding)
+      -- Participants ChanelID Balances Timeloc
       Start [Wallet] Integer [Integer] Integer
-    | -- | Fund the channel
-      -- | Funder Index ChannelID
+    | -- Fund the channel
+      -- Funder Index ChannelID
       Fund Wallet Integer Integer
-    | -- | Abort the channel
-      -- | Issuer wallets ChannelID
+    | -- Abort the channel
+      -- Issuer wallets ChannelID
       Abort Wallet [Wallet] Integer
-    | -- | Open Issuer Participants ChannelID Balances Timelock.
+    | -- Open Issuer Participants ChannelID Balances Timelock.
       Open Wallet [Wallet] Integer [Integer] Integer
-    | -- | Close Issuer Participants ChannelId.
+    | -- Close Issuer Participants ChannelId.
       Close Wallet [Wallet] Integer
-    | -- | ForceClose Issuer Participants ChannelID.
+    | -- ForceClose Issuer Participants ChannelID.
       ForceClose Wallet [Wallet] Integer
-    | -- | Dispute -> Issuer Participants ChannelId ProposedState
+    | -- Dispute -> Issuer Participants ChannelId ProposedState
       Dispute Wallet [Wallet] Integer ChannelState
-    | -- | Update
+    | -- Update
       Update ChannelState
-    | -- | Finalize: sets the final bit in the state
+    | -- Finalize: sets the final bit in the state
       Finalize
-    | -- | Wait Slots
+    | -- Wait Slots
       Wait Integer
     deriving stock (P.Show, P.Eq)
     deriving (Data)
@@ -124,15 +122,16 @@ instance ContractModel PerunModel where
     withdraw (head parties) $ Ada.lovelaceValueOf $ head startBalances
     wait 1
   nextState (Fund funder index _) = do
-    modifyContractState (\case
-        PerunModel Nothing -> P.error "Funding only works on existing channels"
-        PerunModel (Just (_, _, _, True)) -> P.error "Funding only works on unfunded channels"
-        PerunModel (Just (cs, tl, oldFunding, _)) ->
-          let newFunding = addFunding (balances cs!!index) index oldFunding in
-          PerunModel
-            ( Just
-              (cs, tl, newFunding, newFunding == balances cs)
-            )
+    modifyContractState
+      ( \case
+          PerunModel Nothing -> P.error "Funding only works on existing channels"
+          PerunModel (Just (_, _, _, True)) -> P.error "Funding only works on unfunded channels"
+          PerunModel (Just (cs, tl, oldFunding, _)) ->
+            let newFunding = addFunding (balances cs !! index) index oldFunding
+             in PerunModel
+                  ( Just
+                      (cs, tl, newFunding, newFunding == balances cs)
+                  )
       )
     s <-
       getContractState >>= \case
