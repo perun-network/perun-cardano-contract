@@ -41,7 +41,9 @@ common shared
 
 library
     import: shared
-    exposed-modules:  PerunDummy
+    exposed-modules: Perun
+                   , Perun.Onchain
+                   , Perun.Offchain
 
     -- Modules included in this library but not exported.
     -- other-modules:
@@ -74,8 +76,9 @@ test-suite perun-plutus-test
                       -rtsopts
                       -with-rtsopts=-N
                       -fno-warn-type-defaults
-  other-modules:      PerunPlutus.PerunDummySpec
+  other-modules:      PerunPlutus.PerunSpec
                     , PerunPlutus.TestCases
+                    , PerunPlutus.Test.MockContract
   build-depends:      hspec
                     , hspec-expectations
                     , QuickCheck -any
@@ -86,7 +89,10 @@ test-suite perun-plutus-test
                     , hspec-expectations-pretty-diff
                     , perun-plutus
                     , plutus-contract
+                    , aeson
+                    , containers
                     , plutus-ledger
+                    , plutus-ledger-constraints
                     , plutus-ledger-api
                     , plutus-tx
                     , lens
