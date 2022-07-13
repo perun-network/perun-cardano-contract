@@ -9,11 +9,11 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
-module PerunPlutus.Test.MockContract where
+module PerunPlutus.Test.EvilContract where
 
 import Control.Monad hiding (fmap)
 import Data.Aeson (FromJSON, ToJSON)
-import Data.Map as Map
+import Data.Map as Map hiding (map)
 import Data.Text (Text)
 import GHC.Generics (Generic)
 import Ledger
@@ -46,53 +46,117 @@ data MockParams = MockParams
   deriving (Generic, ToJSON, FromJSON)
   deriving stock (P.Eq, P.Show)
 
-type MockSchema =
-  Endpoint "start" MockParams
-    .\/ Endpoint "fund" MockParams
-    .\/ Endpoint "abort" MockParams
-    .\/ Endpoint "open" MockParams
-    .\/ Endpoint "dispute" MockParams
-    .\/ Endpoint "close" MockParams
-    .\/ Endpoint "forceClose" MockParams
+data EvilOpen = EvilOpen
+  { eoChannelId :: !ChannelID,
+    eoTimeLock :: !Integer,
+    eoSigningPKs :: ![PaymentPubKey],
+    eoBalances :: ![Integer],
+    eoVersion :: !Integer,
+    eoValue :: !Integer,
+    eoTimeStamp :: !POSIXTime,
+    eoPaymentPKs :: ![PaymentPubKeyHash],
+    eoDisputed :: !Bool,
+    eoFinal :: !Bool,
+    eoFunded :: !Bool,
+    eoFunding :: ![Integer]
+  }
+  deriving (Generic, ToJSON, FromJSON)
+  deriving stock (P.Eq, P.Show)
 
-open :: AsContractError e => MockParams -> Contract w s e ()
-open MockParams {..} = do
+type EvilStart = OpenParams
+
+data EvilFund = EvilFund
+  { efChannelId :: !Integer,
+    efFunding :: ![Integer]
+  }
+  deriving (Generic, ToJSON, FromJSON)
+  deriving stock (P.Eq, P.Show)
+
+newtype EvilAbort = EvilAbort
+  { eaChannelId :: Integer
+  }
+  deriving (Generic, ToJSON, FromJSON)
+  deriving stock (P.Eq, P.Show)
+
+data EvilDispute = EvilDispute
+  { edChannelId :: !ChannelID,
+    edTimeLock :: !Integer,
+    edSigningPKs :: ![PaymentPubKey],
+    edBalances :: ![Integer],
+    edVersion :: !Integer,
+    edValue :: !Integer,
+    edSignedState :: !SignedState,
+    edTimeStamp :: !POSIXTime,
+    edPaymentPKs :: ![PaymentPubKeyHash],
+    edDisputed :: !Bool,
+    edValidTimeRange :: !(Interval POSIXTime),
+    edFinal :: !Bool,
+    edFunded :: !Bool,
+    edFunding :: ![Integer]
+  }
+  deriving (Generic, ToJSON, FromJSON)
+  deriving stock (P.Eq, P.Show)
+
+data EvilClose = EvilClose
+  { ecSignedState :: !SignedState,
+    ecSigningPKs :: ![PaymentPubKey]
+  }
+  deriving (Generic, ToJSON, FromJSON)
+  deriving stock (P.Eq, P.Show)
+
+newtype EvilForceClose = EvilForceClose
+  { efcChannelId :: Integer
+  }
+  deriving (Generic, ToJSON, FromJSON)
+  deriving stock (P.Eq, P.Show)
+
+type EvilSchema =
+  Endpoint "start" EvilStart
+    .\/ Endpoint "fund" EvilFund
+    .\/ Endpoint "abort" EvilAbort
+    .\/ Endpoint "open" EvilOpen
+    .\/ Endpoint "dispute" EvilDispute
+    .\/ Endpoint "close" EvilClose
+    .\/ Endpoint "forceClose" EvilForceClose
+
+open :: EvilOpen -> Contract w s Text ()
+open EvilOpen {..} = do
   let c =
         Channel
-          { pTimeLock = mockTimeLock,
-            pSigningPKs = mockSigningPKs,
-            pPaymentPKs = mockPaymentPKs
+          { pTimeLock = eoTimeLock,
+            pSigningPKs = eoSigningPKs,
+            pPaymentPKs = eoPaymentPKs
           }
       s =
         ChannelState
-          { channelId = mockChannelId,
-            balances = mockBalances,
-            version = mockVersion,
-            final = mockFinal
+          { channelId = eoChannelId,
+            balances = eoBalances,
+            version = eoVersion,
+            final = eoFinal
           }
       d =
         ChannelDatum
           { channelParameters = c,
             state = s,
-            time = mockTimeStamp,
-            disputed = mockDisputed,
-            funding = mockFunding,
-            funded = mockFunded
+            time = eoTimeStamp,
+            disputed = eoDisputed,
+            funding = eoFunding,
+            funded = eoFunded
           }
-      v = Ada.lovelaceValueOf mockValue
+      v = Ada.lovelaceValueOf eoValue
       tx = Constraints.mustPayToTheScript d v
-  ledgerTx <- submitTxConstraints (typedChannelValidator mockChannelId) tx
+  ledgerTx <- submitTxConstraints (typedChannelValidator eoChannelId) tx
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
-  logInfo @P.String $ printf "Opened channel %d with parameters %s and value %s" mockChannelId (P.show c) (P.show v)
+  logInfo @P.String $ printf "Opened channel %d with parameters %s and value %s" eoChannelId (P.show c) (P.show v)
 
-start :: MockParams -> Contract w s Text ()
-start MockParams {..} = PO.start $ OpenParams mockChannelId mockSigningPKs mockPaymentPKs mockBalances mockTimeLock
+start :: EvilStart -> Contract w s Text ()
+start = PO.start
 
-fund :: MockParams -> Contract w s Text ()
-fund MockParams {..} = do
-  (oref, o, d@ChannelDatum {..}) <- findChannel mockChannelId
+fund :: EvilFund -> Contract w s Text ()
+fund EvilFund {..} = do
+  (oref, o, d@ChannelDatum {..}) <- findChannel efChannelId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
-  let newFunding = mockFunding
+  let newFunding = efFunding
       newDatum =
         d
           { funding = newFunding,
@@ -102,8 +166,8 @@ fund MockParams {..} = do
       r = Redeemer $ PlutusTx.toBuiltinData Fund
 
       lookups =
-        Constraints.typedValidatorLookups (typedChannelValidator mockChannelId)
-          P.<> Constraints.otherScript (channelValidator mockChannelId)
+        Constraints.typedValidatorLookups (typedChannelValidator efChannelId)
+          P.<> Constraints.otherScript (channelValidator efChannelId)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
         Constraints.mustPayToTheScript newDatum v
@@ -111,14 +175,14 @@ fund MockParams {..} = do
   ledgerTx <- submitTxConstraintsWith lookups tx
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
 
-abort :: MockParams -> Contract w s Text ()
-abort MockParams {..} = do
-  (oref, o, d@ChannelDatum {..}) <- findChannel mockChannelId
+abort :: EvilAbort -> Contract w s Text ()
+abort EvilAbort {..} = do
+  (oref, o, d@ChannelDatum {..}) <- findChannel eaChannelId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   let r = Redeemer $ PlutusTx.toBuiltinData Abort
       lookups =
-        Constraints.typedValidatorLookups (typedChannelValidator mockChannelId)
-          P.<> Constraints.otherScript (channelValidator mockChannelId)
+        Constraints.typedValidatorLookups (typedChannelValidator eaChannelId)
+          P.<> Constraints.otherScript (channelValidator eaChannelId)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx = Constraints.mustSpendScriptOutput oref r
   ledgerTx <- submitTxConstraintsWith lookups tx
@@ -126,19 +190,16 @@ abort MockParams {..} = do
   logInfo @P.String $
     printf
       "aborted channel %d with parameters %s. The funding was: %s"
-      mockChannelId
+      eaChannelId
       (P.show channelParameters)
       (P.show funding)
 
-close :: MockParams -> Contract w s Text ()
-close MockParams {..} = do
-  sst <- case mockSignedState of
-    Nothing -> throwError "missing signed state"
-    Just s -> return s
-  let ChannelState {..} = extractVerifiedState sst mockSigningPKs
+close :: EvilClose -> Contract w s Text ()
+close EvilClose {..} = do
+  let ChannelState {..} = extractVerifiedState ecSignedState ecSigningPKs
   (oref, o, d@ChannelDatum {..}) <- findChannel channelId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
-  let r = Redeemer $ PlutusTx.toBuiltinData $ MkClose sst
+  let r = Redeemer $ PlutusTx.toBuiltinData $ MkClose ecSignedState
       lookups =
         Constraints.typedValidatorLookups (typedChannelValidator channelId)
           P.<> Constraints.otherScript (channelValidator channelId)
@@ -153,14 +214,14 @@ close MockParams {..} = do
       (P.show channelParameters)
       (P.show balances)
 
-forceClose :: MockParams -> Contract w s Text ()
-forceClose MockParams {..} = do
-  (oref, o, d@ChannelDatum {..}) <- findChannel mockChannelId
+forceClose :: EvilForceClose -> Contract w s Text ()
+forceClose EvilForceClose {..} = do
+  (oref, o, d@ChannelDatum {..}) <- findChannel efcChannelId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   let r = Redeemer $ PlutusTx.toBuiltinData ForceClose
       lookups =
-        Constraints.typedValidatorLookups (typedChannelValidator mockChannelId)
-          P.<> Constraints.otherScript (channelValidator mockChannelId)
+        Constraints.typedValidatorLookups (typedChannelValidator efcChannelId)
+          P.<> Constraints.otherScript (channelValidator efcChannelId)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx = Constraints.mustSpendScriptOutput oref r
   ledgerTx <- submitTxConstraintsWith lookups tx
@@ -168,49 +229,46 @@ forceClose MockParams {..} = do
   logInfo @P.String $
     printf
       "force closed channel %d with parameters %s. The final balances are: %s"
-      mockChannelId
+      efcChannelId
       (P.show channelParameters)
       (P.show $ balances state)
 
-dispute :: MockParams -> Contract w s Text ()
-dispute MockParams {..} = do
-  (oref, o, d) <- findChannel mockChannelId
+dispute :: EvilDispute -> Contract w s Text ()
+dispute EvilDispute {..} = do
+  (oref, o, d) <- findChannel edChannelId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
-  sst <- case mockSignedState of
-    Nothing -> throwError "missing signed state"
-    Just s -> return s
   let c =
         Channel
-          { pTimeLock = mockTimeLock,
-            pSigningPKs = mockSigningPKs,
-            pPaymentPKs = mockPaymentPKs
+          { pTimeLock = edTimeLock,
+            pSigningPKs = edSigningPKs,
+            pPaymentPKs = edPaymentPKs
           }
       s =
         ChannelState
-          { channelId = mockChannelId,
-            balances = mockBalances,
-            version = mockVersion,
-            final = mockFinal
+          { channelId = edChannelId,
+            balances = edBalances,
+            version = edVersion,
+            final = edFinal
           }
       datum =
         ChannelDatum
           { channelParameters = c,
             state = s,
-            time = mockTimeStamp,
-            disputed = mockDisputed,
-            funding = mockFunding,
-            funded = mockFunded
+            time = edTimeStamp,
+            disputed = edDisputed,
+            funding = edFunding,
+            funded = edFunded
           }
-      v = Ada.lovelaceValueOf mockValue
+      v = Ada.lovelaceValueOf edValue
 
-      r = Redeemer $ PlutusTx.toBuiltinData $ MkDispute sst
+      r = Redeemer $ PlutusTx.toBuiltinData $ MkDispute edSignedState
       lookups =
-        Constraints.typedValidatorLookups (typedChannelValidator mockChannelId)
-          P.<> Constraints.otherScript (channelValidator mockChannelId)
+        Constraints.typedValidatorLookups (typedChannelValidator edChannelId)
+          P.<> Constraints.otherScript (channelValidator edChannelId)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
         Constraints.mustPayToTheScript datum v
-          <> Constraints.mustValidateIn (fromMaybe (always :: Interval POSIXTime) mockValidTimeRange)
+          <> Constraints.mustValidateIn edValidTimeRange
           <> Constraints.mustSpendScriptOutput oref r
   ledgerTx <- submitTxConstraintsWith lookups tx
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
@@ -219,8 +277,8 @@ dispute MockParams {..} = do
 --
 -- Top-level contract, exposing all endpoints.
 --
-mockContract :: Contract () MockSchema Text ()
-mockContract = selectList [start', fund', abort', open', dispute', close', forceClose'] >> mockContract
+evilContract :: Contract () EvilSchema Text ()
+evilContract = selectList [start', fund', abort', open', dispute', close', forceClose'] >> evilContract
   where
     start' = endpoint @"start" start
     fund' = endpoint @"fund" fund

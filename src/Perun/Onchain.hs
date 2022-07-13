@@ -85,7 +85,7 @@ data ChannelState = ChannelState
     version :: !Integer,
     final :: !Bool
   }
-  deriving (Data)
+  deriving (Data, Generic, ToJSON, FromJSON)
   deriving stock (P.Eq, P.Show)
 
 instance Eq ChannelState where
@@ -114,7 +114,7 @@ PlutusTx.makeLift ''SignedState
 
 -- Redeemer Datatype
 data ChannelAction = Fund | Abort | MkDispute SignedState | MkClose SignedState | ForceClose
-  deriving (P.Show)
+  deriving (P.Show, Generic, ToJSON, FromJSON)
 
 PlutusTx.unstableMakeIsData ''ChannelAction
 PlutusTx.makeLift ''ChannelAction
@@ -128,7 +128,7 @@ data ChannelDatum = ChannelDatum
     funded :: !Bool,
     disputed :: !Bool
   }
-  deriving (P.Show)
+  deriving (P.Show, Generic, ToJSON, FromJSON)
 
 PlutusTx.unstableMakeIsData ''ChannelDatum
 PlutusTx.makeLift ''ChannelDatum
