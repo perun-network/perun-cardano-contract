@@ -80,7 +80,7 @@ test-suite perun-plutus-test
                       -fno-warn-type-defaults
   other-modules:      PerunPlutus.PerunSpec
                     , PerunPlutus.TestCases
-                    , PerunPlutus.Test.MockContract
+                    , PerunPlutus.Test.EvilContract
   build-depends:      hspec
                     , hspec-expectations
                     , QuickCheck -any
