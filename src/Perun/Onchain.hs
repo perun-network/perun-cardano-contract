@@ -148,9 +148,9 @@ defaultValidMsRangeSkew :: POSIXTime
 defaultValidMsRangeSkew = 1000
 
 -- | Returns true, iff the new state is a valid post-state of the old channel state.
--- | A valid state transition must retain the channelId and the sum of the balances.
--- | The new version number must be greater than the old version number and there is
--- | no valid transition from a final state.
+--  A valid state transition must retain the channelId and the sum of the balances.
+--  The new version number must be greater than the old version number and there is
+--  no valid transition from a final state.
 {-# INLINEABLE isValidStateTransition #-}
 isValidStateTransition :: ChannelState -> ChannelState -> Bool
 isValidStateTransition old new =
@@ -159,7 +159,6 @@ isValidStateTransition old new =
     && version old < version new
     && not (final old)
 
--- | pls work
 {-# INLINEABLE extractVerifiedState #-}
 extractVerifiedState :: SignedState -> [PaymentPubKey] -> ChannelState
 extractVerifiedState (SignedState sigs) signingKeys =
@@ -173,8 +172,8 @@ extractVerifiedState (SignedState sigs) signingKeys =
         else traceError "invalidSignatures"
 
 -- | Checks all signatures on the given SignedState under the given public keys
--- | and returns the corresponding ChannelState if all signatures are valid on
--- | the same ChannelState.
+-- and returns the corresponding ChannelState if all signatures are valid on
+-- the same ChannelState.
 -- {-# INLINEABLE extractVerifiedState #-}
 -- extractVerifiedState :: SignedState -> (PaymentPubKey, PaymentPubKey) -> ChannelState
 -- extractVerifiedState (SignedState smA smB) (pkA, pkB) = case (verifySignedMessageConstraints' pkA smA, verifySignedMessageConstraints' pkB smB) of
