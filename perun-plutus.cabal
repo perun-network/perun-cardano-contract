@@ -2,6 +2,8 @@ cabal-version:      2.4
 name:               perun-plutus
 version:            0.1.0.0
 
+Tested-With: GHC ==8.10.7
+
 -- A short (one-line) description of the package.
 -- synopsis:
 
