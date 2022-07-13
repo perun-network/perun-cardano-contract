@@ -17,9 +17,15 @@ on:
   - push
   - pull_request
 jobs:
-  linux:
-    name: Haskell-CI - Linux - ${{ matrix.compiler }}
+  ormolu:
     runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v2
+      - uses: mrkkrp/ormolu-action@v6
+  linux:
+    runs-on: ubuntu-20.04
+    needs: ormolu
+    name: Haskell-CI - Linux - ${{ matrix.compiler }}
     timeout-minutes:
       60
     container:
