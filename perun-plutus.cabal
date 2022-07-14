@@ -15,8 +15,9 @@ Tested-With: GHC ==8.10.7
 
 -- The license under which the package is released.
 -- license:
-author:             Norbert Dzikowski
-maintainer:         norbert@perun.network
+author:             Jan Bormet
+                    Norbert Dzikowski
+maintainer:         feedback@perun.network
 
 -- A copyright notice.
 -- copyright:
