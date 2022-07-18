@@ -1,8 +1,8 @@
 -- {-# OPTIONS_GHC -F -pgmF hspec-discover #-}
 module Main (main) where
 
-import PerunPlutus.TestCases
 import Control.Monad (void)
+import PerunPlutus.TestCases
 
 main :: IO ()
-main = void runPerunDummyTests
+main = void runPerunTests
