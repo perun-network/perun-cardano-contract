@@ -101,4 +101,7 @@ test-suite perun-plutus-test
                     , lens
                     , text
                     , extra
+                    , freer-simple
+                    , freer-extras
+                    , bytestring
   build-tool-depends: hspec-discover:hspec-discover == 2.*

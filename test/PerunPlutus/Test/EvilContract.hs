@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -13,7 +14,9 @@ module PerunPlutus.Test.EvilContract where
 
 import Control.Monad hiding (fmap)
 import Data.Aeson (FromJSON, ToJSON)
+import Data.Data
 import Data.Map as Map hiding (map)
+import qualified Data.Semigroup as Semigroup
 import Data.Text (Text)
 import GHC.Generics (Generic)
 import Ledger
@@ -26,25 +29,6 @@ import qualified PlutusTx
 import PlutusTx.Prelude
 import Text.Printf (printf)
 import qualified Prelude as P
-
-data MockParams = MockParams
-  { mockChannelId :: !ChannelID,
-    mockSigningPKs :: ![PaymentPubKey],
-    mockPaymentPKs :: ![PaymentPubKeyHash],
-    mockBalances :: ![Integer],
-    mockValue :: !Integer,
-    mockVersion :: !Integer,
-    mockFinal :: !Bool,
-    mockTimeLock :: !Integer,
-    mockTimeStamp :: !POSIXTime,
-    mockDisputed :: !Bool,
-    mockSignedState :: !(Maybe SignedState),
-    mockValidTimeRange :: !(Maybe POSIXTimeRange),
-    mockFunded :: !Bool,
-    mockFunding :: ![Integer]
-  }
-  deriving (Generic, ToJSON, FromJSON)
-  deriving stock (P.Eq, P.Show)
 
 data EvilOpen = EvilOpen
   { eoChannelId :: !ChannelID,
@@ -65,9 +49,14 @@ data EvilOpen = EvilOpen
 
 type EvilStart = OpenParams
 
+data FundCase = FundSteal | FundViolateChannelIntegrity | FundInvalidFunded
+  deriving (Generic, ToJSON, FromJSON)
+  deriving stock (P.Eq, P.Show, Data)
+
 data EvilFund = EvilFund
   { efChannelId :: !Integer,
-    efFunding :: ![Integer]
+    efFunderIdx :: !Integer,
+    efCase :: FundCase
   }
   deriving (Generic, ToJSON, FromJSON)
   deriving stock (P.Eq, P.Show)
@@ -152,28 +141,42 @@ open EvilOpen {..} = do
 start :: EvilStart -> Contract w s Text ()
 start = PO.start
 
-fund :: EvilFund -> Contract w s Text ()
+fund :: EvilFund -> Contract (Maybe (Semigroup.Last TxId)) s Text ()
 fund EvilFund {..} = do
-  (oref, o, d@ChannelDatum {..}) <- findChannel efChannelId
-  logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
-  let newFunding = efFunding
-      newDatum =
-        d
-          { funding = newFunding,
-            funded = newFunding == balances state
-          }
-      v = Ada.lovelaceValueOf $ sum newFunding
-      r = Redeemer $ PlutusTx.toBuiltinData Fund
+  case efCase of
+    FundSteal -> fundSteal efChannelId efFunderIdx
+    FundViolateChannelIntegrity -> P.undefined
+    FundInvalidFunded -> P.undefined
 
+fundSteal :: ChannelID -> Integer -> Contract (Maybe (Semigroup.Last TxId)) s Text ()
+fundSteal cid idx = do
+  (oref, o, d@ChannelDatum {..}) <- findChannel cid
+  logInfo @P.String $ printf "EVIL_CONTRACT: found channel utxo with datum %s" (P.show d)
+  let (fs, _ : fs') = P.splitAt (P.fromIntegral idx P.- 1) $ P.replicate (P.length $ balances state) 0
+      newFunding = fs ++ [sum funding] ++ fs'
+      newDatum = d {funding = newFunding, funded = newFunding == balances state}
+      v = Ada.lovelaceValueOf (sum newFunding)
+      r = Redeemer (PlutusTx.toBuiltinData Fund)
       lookups =
-        Constraints.typedValidatorLookups (typedChannelValidator efChannelId)
-          P.<> Constraints.otherScript (channelValidator efChannelId)
+        Constraints.typedValidatorLookups (typedChannelValidator cid)
+          P.<> Constraints.otherScript (channelValidator cid)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
         Constraints.mustPayToTheScript newDatum v
           <> Constraints.mustSpendScriptOutput oref r
   ledgerTx <- submitTxConstraintsWith lookups tx
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
+  tell . Just . Semigroup.Last . getCardanoTxId $ ledgerTx
+  logInfo @P.String "EVIL_CONTRACT: executed stealing of funds"
+
+dropIndex :: Integer -> [a] -> Maybe [a]
+dropIndex idx as | idx P.< 0 P.|| idx > length as P.|| P.null as = Nothing
+dropIndex idx as = Just $ go idx 0 (as, [])
+  where
+    go i ci (a : as, bs)
+      | i P.== ci = reverse bs P.++ as
+      | otherwise = go i (ci P.+ 1) (as, a : bs)
+    go _ _ _ = P.error "impossible"
 
 abort :: EvilAbort -> Contract w s Text ()
 abort EvilAbort {..} = do
@@ -277,7 +280,7 @@ dispute EvilDispute {..} = do
 --
 -- Top-level contract, exposing all endpoints.
 --
-evilContract :: Contract () EvilSchema Text ()
+evilContract :: Contract (Maybe (Semigroup.Last TxId)) EvilSchema Text ()
 evilContract = selectList [start', fund', abort', open', dispute', close', forceClose'] >> evilContract
   where
     start' = endpoint @"start" start

@@ -7,6 +7,7 @@ module PerunPlutus.TestCases (runPerunTests) where
 import Data.Tuple.Extra
 import Perun hiding (ChannelAction (..))
 import PerunPlutus.PerunSpec
+import PerunPlutus.Test.EvilContract
 import Plutus.Contract.Test
 import Plutus.Contract.Test.ContractModel
 import Test.QuickCheck
@@ -169,6 +170,15 @@ threePartyFundingAbortTest (wa, wb, wc) = do
   action $ Fund wb 1 channelID
   action $ Abort wb [wa, wb, wc] channelID
 
+fundingNegativeTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
+fundingNegativeTest (wa, wb, wc) = do
+  channelID <- forAllQ arbitraryQ
+  [initBalA, initBalB, initBalC] <- forAllQ $ map chooseQ [(initBalLB, initBalUB), (initBalLB, initBalUB), (initBalLB, initBalUB)]
+  action $ Start [wa, wb, wc] channelID [initBalA, initBalB, initBalC] defaultTimeLock
+  action $ Fund wb 1 channelID
+  action $ MaliciousFund wa channelID 0 FundSteal
+  action $ Abort wa [wa, wb, wc] channelID
+
 requireGetChannel :: String -> DL PerunModel (ChannelState, Integer, [Integer], Bool)
 requireGetChannel msg =
   getContractState >>= \case
@@ -205,6 +215,9 @@ prop_ThreePartyFundingAndPaymentTest = withMaxSuccess 1 $ forAllDL (threePartyFu
 
 prop_ThreePartyFundingAbortTest :: Property
 prop_ThreePartyFundingAbortTest = withMaxSuccess 1 $ forAllDL (threePartyFundingAbortTest (w1, w2, w3)) propPerun
+
+prop_FundingNegativeTest :: Property
+prop_FundingNegativeTest = withMaxSuccess 1 $ forAllDL (fundingNegativeTest (w1, w2, w3)) propPerun
 
 return [] -- <- Needed for TemplateHaskell to do some magic and find the property tests.
 

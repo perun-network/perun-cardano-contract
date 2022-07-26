@@ -1,9 +1,14 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -14,18 +19,26 @@ module PerunPlutus.PerunSpec where
 
 import Control.Lens hiding (both)
 import Control.Monad
+import Data.Aeson (FromJSON, ToJSON)
 import Data.Data
+import qualified Data.Semigroup as Semigroup
 import Data.Text (Text)
+import Ledger
 import qualified Ledger.Ada as Ada
-import Ledger.Address
 import qualified Ledger.Value as Value
 import Perun hiding (ChannelAction (..))
 import PerunPlutus.Test.EvilContract
 import Plutus.Contract.Oracle
+import qualified Plutus.Contract.Request as Trace
 import Plutus.Contract.Test (Wallet, mockWalletPaymentPubKey, mockWalletPaymentPubKeyHash, w1, w2, w3, w4)
 import Plutus.Contract.Test.ContractModel
+import qualified Plutus.Contract.Types as ET
+import qualified Plutus.Trace.Effects.Assert as TA (assert)
+import Plutus.Trace.Effects.RunContract (ContractConstraints)
 import qualified Plutus.Trace.Emulator as Trace
+import qualified Plutus.Trace.Emulator.Types as ET
 import PlutusTx.Prelude hiding (mapM, unless)
+import Wallet.Emulator.MultiAgent as Emulator
 import qualified Wallet.Emulator.Wallet as Trace
 import qualified Prelude as P
 
@@ -39,7 +52,8 @@ exVal :: Value.Value
 exVal = Ada.lovelaceValueOf 1
 
 -- | PerunModel: State, Timelock, Funding, Funded
-newtype PerunModel = PerunModel (Maybe (ChannelState, Integer, [Integer], Bool)) deriving (P.Show, P.Eq, Data)
+newtype PerunModel = PerunModel (Maybe (ChannelState, Integer, [Integer], Bool))
+  deriving (P.Show, P.Eq, Data)
 
 deriving instance P.Eq (ContractInstanceKey PerunModel w schema err params)
 
@@ -76,10 +90,11 @@ instance ContractModel PerunModel where
       Finalize
     | -- Wait Slots
       Wait Integer
-    | MaliciousFund Wallet Integer Integer
-    | MaliciousClose Wallet [Wallet] Integer
-    | MaliciousForceClose Wallet [Wallet] Integer
-    | MaliciousDispute Wallet [Wallet] Integer ChannelState
+    | -- MaliciousFund -> Issuer ChannelID FunderIndex FundingTestcase.
+      MaliciousFund Wallet Integer Integer FundCase
+    | MaliciousClose Wallet
+    | MaliciousForceClose Wallet
+    | MaliciousDispute Wallet
     deriving stock (P.Show, P.Eq)
     deriving (Data)
 
@@ -88,11 +103,13 @@ instance ContractModel PerunModel where
     -- `ContractInstanceKey` with a single constructor distinguished by the
     -- wallet they are running in.
     Participant :: Wallet -> ContractInstanceKey PerunModel () ChannelSchema Text ()
-    Adversary :: Wallet -> ContractInstanceKey PerunModel () EvilSchema Text ()
+    Adversary :: Wallet -> ContractInstanceKey PerunModel (Maybe (Semigroup.Last TxId)) EvilSchema Text ()
 
   -- Start contract instances for the perun contract `Participant` and a
   -- malicious contract `Adversary`.
-  initialInstances = ((`StartContract` ()) . Participant <$> wallets) ++ ((`StartContract` ()) . Adversary <$> wallets)
+  initialInstances =
+    ((`StartContract` ()) . Participant <$> wallets)
+      ++ ((`StartContract` ()) . Adversary <$> wallets)
 
   instanceContract _ Participant {} _ = contract
   instanceContract _ Adversary {} _ = evilContract
@@ -209,10 +226,10 @@ instance ContractModel PerunModel where
           PerunModel (Just (s, tl, fx, f)) -> PerunModel . Just $ (s {final = True}, tl, fx, f)
       )
   nextState (Wait duration) = wait duration
-  nextState MaliciousFund {} = P.error "Not implemented"
-  nextState MaliciousClose {} = P.error "Not implemented"
-  nextState MaliciousForceClose {} = P.error "Not implemented"
-  nextState MaliciousDispute {} = P.error "Not implemented"
+  nextState MaliciousFund {} = invariant >> wait 1
+  nextState MaliciousClose {} = invariant >> wait 1
+  nextState MaliciousForceClose {} = invariant >> wait 1
+  nextState MaliciousDispute {} = invariant >> wait 1
 
   perform handle _ s cmd = case cmd of
     Start parties cid startBalances timeLock -> do
@@ -252,9 +269,9 @@ instance ContractModel PerunModel where
       -- onchain wise.
       return ()
     Dispute issuer parties _ chState -> do
-      walletStates <- mapM Trace.agentState parties
-      let sks = map (unPaymentPrivateKey . Trace.ownPaymentPrivateKey) walletStates
-      let pks = map Trace.ownPaymentPublicKey walletStates
+      wss <- mapM Trace.agentState parties
+      let sks = map (unPaymentPrivateKey . Trace.ownPaymentPrivateKey) wss
+      let pks = map Trace.ownPaymentPublicKey wss
       Trace.callEndpoint @"dispute"
         (handle $ Participant issuer)
         ( DisputeParams
@@ -267,9 +284,9 @@ instance ContractModel PerunModel where
       chan <- case cs of
         PerunModel Nothing -> Trace.throwError . Trace.GenericError $ "no channel to close"
         PerunModel (Just (chan, _, _, _)) -> return chan
-      walletStates <- mapM Trace.agentState parties
-      let sks = map (unPaymentPrivateKey . Trace.ownPaymentPrivateKey) walletStates
-      let pks = map Trace.ownPaymentPublicKey walletStates
+      wss <- mapM Trace.agentState parties
+      let sks = map (unPaymentPrivateKey . Trace.ownPaymentPrivateKey) wss
+      let pks = map Trace.ownPaymentPublicKey wss
       Trace.callEndpoint @"close"
         (handle $ Participant issuer)
         ( CloseParams
@@ -284,7 +301,45 @@ instance ContractModel PerunModel where
       delay 1
     Finalize -> return ()
     Wait duration -> delay duration
-    MaliciousFund {} -> P.error "Not implemented"
-    MaliciousClose {} -> P.error "Not implemented"
-    MaliciousForceClose {} -> P.error "Not implemented"
-    MaliciousDispute {} -> P.error "Not implemented"
+    MaliciousFund w cID idx fc -> do
+      requireInvalidTxEndpoint @"fund" (handle $ Adversary w) (EvilFund cID idx fc) "malicious funding should not work"
+    MaliciousClose w -> do
+      p <- Trace.agentState w
+      let sk = unPaymentPrivateKey . Trace.ownPaymentPrivateKey $ p
+          pk = Trace.ownPaymentPublicKey p
+      requireInvalidTxEndpoint @"close" (handle $ Adversary w) (EvilClose (SignedState [signMessage' (ChannelState 0 [0] 0 False) sk]) [pk]) "malicious closing should not work"
+    MaliciousForceClose w -> do
+      requireInvalidTxEndpoint @"forceClose" (handle $ Adversary w) (EvilForceClose 0) "malicious forceClose should not work"
+    MaliciousDispute w -> do
+      requireInvalidTxEndpoint @"dispute" (handle $ Adversary w) P.undefined "maliciious dispute should not work"
+
+-- | Model does not change!
+invariant :: Spec s ()
+invariant = return ()
+
+data EndpointError = ExpectedEndpointError P.String | UnexpectedEndpointError P.String deriving (P.Show, P.Eq)
+
+-- | requireInvalidTxEndpoint calls the given endpoint with the given value and
+-- asserts that the contract, which has to track its sent tx in its state, sent
+-- a tx which was rejected onchain because its validation failed.
+requireInvalidTxEndpoint ::
+  forall l ev s e.
+  ( ToJSON ev,
+    FromJSON e,
+    ContractConstraints s,
+    Trace.HasEndpoint l ev s
+  ) =>
+  Trace.ContractHandle (Maybe (Semigroup.Last TxId)) s e ->
+  ev ->
+  P.String ->
+  SpecificationEmulatorTrace ()
+requireInvalidTxEndpoint h v msg = do
+  Trace.callEndpoint @l h v
+  delay 1
+  css <- Trace.getContractState h
+  case view ET.observableState $ ET.instContractState css of
+    Nothing -> Trace.throwError . Trace.GenericError $ "evilcontract did not send tx"
+    Just (Semigroup.Last txid) -> TA.assert msg $ \es ->
+      case transaction (view (Emulator.chainState . Trace.chainNewestFirst) es) txid of
+        Just _ -> True
+        Nothing -> False

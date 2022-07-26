@@ -99,10 +99,11 @@ instance Eq ChannelState where
 PlutusTx.unstableMakeIsData ''ChannelState
 PlutusTx.makeLift ''ChannelState
 
-data SignedState = SignedState
-  { stateSigs :: ![SignedMessage ChannelState]
+newtype SignedState = SignedState
+  { stateSigs :: [SignedMessage ChannelState]
   }
-  deriving (Generic, ToJSON, FromJSON)
+  deriving (Generic)
+  deriving newtype (ToJSON, FromJSON)
   deriving stock (P.Eq, P.Show)
 
 instance Eq SignedState where
