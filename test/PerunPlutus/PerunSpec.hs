@@ -90,11 +90,12 @@ instance ContractModel PerunModel where
       Finalize
     | -- Wait Slots
       Wait Integer
-    | -- MaliciousFund -> Issuer ChannelID FunderIndex FundingTestcase.
-      MaliciousFund Wallet Integer Integer FundCase
-    | MaliciousClose Wallet
-    | MaliciousForceClose Wallet
-    | MaliciousDispute Wallet
+    | -- MaliciousFund -> WaitTime Issuer ChannelID FunderIndex FundingTestcase.
+      MaliciousFund Integer Wallet ChannelID Integer FundCase
+    | MaliciousAbort Integer Wallet ChannelID AbortCase
+    | MaliciousClose Integer Wallet ChannelID [Wallet] [Integer] CloseCase
+    | MaliciousForceClose Integer Wallet ChannelID ForceCloseCase
+    | MaliciousDispute Integer Wallet ChannelID [Wallet] [Integer] DisputeCase
     deriving stock (P.Show, P.Eq)
     deriving (Data)
 
@@ -103,7 +104,7 @@ instance ContractModel PerunModel where
     -- `ContractInstanceKey` with a single constructor distinguished by the
     -- wallet they are running in.
     Participant :: Wallet -> ContractInstanceKey PerunModel () ChannelSchema Text ()
-    Adversary :: Wallet -> ContractInstanceKey PerunModel (Maybe (Semigroup.Last TxId)) EvilSchema Text ()
+    Adversary :: Wallet -> ContractInstanceKey PerunModel EvilContractState EvilSchema Text ()
 
   -- Start contract instances for the perun contract `Participant` and a
   -- malicious contract `Adversary`.
@@ -226,10 +227,11 @@ instance ContractModel PerunModel where
           PerunModel (Just (s, tl, fx, f)) -> PerunModel . Just $ (s {final = True}, tl, fx, f)
       )
   nextState (Wait duration) = wait duration
-  nextState MaliciousFund {} = invariant >> wait 1
-  nextState MaliciousClose {} = invariant >> wait 1
-  nextState MaliciousForceClose {} = invariant >> wait 1
-  nextState MaliciousDispute {} = invariant >> wait 1
+  nextState (MaliciousFund n _ _ _ _) = invariant >> wait n
+  nextState (MaliciousAbort n _ _ _) = invariant >> wait n
+  nextState (MaliciousClose n _ _ _ _ _) = invariant >> wait n
+  nextState (MaliciousForceClose n _ _ _) = invariant >> wait n
+  nextState (MaliciousDispute n _ _ _ _ _) = invariant >> wait n
 
   perform handle _ s cmd = case cmd of
     Start parties cid startBalances timeLock -> do
@@ -284,15 +286,8 @@ instance ContractModel PerunModel where
       chan <- case cs of
         PerunModel Nothing -> Trace.throwError . Trace.GenericError $ "no channel to close"
         PerunModel (Just (chan, _, _, _)) -> return chan
-      wss <- mapM Trace.agentState parties
-      let sks = map (unPaymentPrivateKey . Trace.ownPaymentPrivateKey) wss
-      let pks = map Trace.ownPaymentPublicKey wss
-      Trace.callEndpoint @"close"
-        (handle $ Participant issuer)
-        ( CloseParams
-            pks
-            (SignedState (map (signMessage' chan) sks))
-        )
+      (ss, pks, _) <- verifiedSignedStateAndKeys parties chan
+      Trace.callEndpoint @"close" (handle $ Participant issuer) (CloseParams pks ss)
       delay 1
     ForceClose issuer _ cID -> do
       Trace.callEndpoint @"forceClose"
@@ -301,17 +296,35 @@ instance ContractModel PerunModel where
       delay 1
     Finalize -> return ()
     Wait duration -> delay duration
-    MaliciousFund w cID idx fc -> do
+    MaliciousFund _ w cID idx fc ->
       requireInvalidTxEndpoint @"fund" (handle $ Adversary w) (EvilFund cID idx fc) "malicious funding should not work"
-    MaliciousClose w -> do
+    MaliciousAbort _ w cID ac ->
+      requireInvalidTxEndpoint @"abort" (handle $ Adversary w) (EvilAbort cID ac) "malicious abourt should not work"
+    MaliciousClose _ w cID parties bals c -> do
+      let cs = s ^. contractState
       p <- Trace.agentState w
       let sk = unPaymentPrivateKey . Trace.ownPaymentPrivateKey $ p
-          pk = Trace.ownPaymentPublicKey p
-      requireInvalidTxEndpoint @"close" (handle $ Adversary w) (EvilClose (SignedState [signMessage' (ChannelState 0 [0] 0 False) sk]) [pk]) "malicious closing should not work"
-    MaliciousForceClose w -> do
-      requireInvalidTxEndpoint @"forceClose" (handle $ Adversary w) (EvilForceClose 0) "malicious forceClose should not work"
-    MaliciousDispute w -> do
-      requireInvalidTxEndpoint @"dispute" (handle $ Adversary w) P.undefined "maliciious dispute should not work"
+      chan <- case cs of
+        PerunModel Nothing -> Trace.throwError . Trace.GenericError $ "no channel to close"
+        PerunModel (Just (chan, _, _, _)) -> return chan
+      (_, pks, _) <- verifiedSignedStateAndKeys parties chan
+      requireInvalidTxEndpoint @"close" (handle $ Adversary w) (EvilClose cID (SignedState [signMessage' (ChannelState 0 [0] 0 False) sk]) pks bals c) "malicious closing should not work"
+    MaliciousForceClose _ w cid c -> do
+      requireInvalidTxEndpoint @"forceClose" (handle $ Adversary w) (EvilForceClose cid c) "malicious forceClose should not work"
+    MaliciousDispute _ w cid parties bals c -> do
+      let cs = s ^. contractState
+      chan <- case cs of
+        PerunModel Nothing -> Trace.throwError . Trace.GenericError $ "no channel to close"
+        PerunModel (Just (chan, _, _, _)) -> return chan
+      (ss, pks, _) <- verifiedSignedStateAndKeys parties chan
+      requireInvalidTxEndpoint @"dispute" (handle $ Adversary w) (EvilDispute cid pks (map paymentPubKeyHash pks) bals ss c) "maliciious dispute should not work"
+
+verifiedSignedStateAndKeys :: [Wallet] -> ChannelState -> SpecificationEmulatorTrace (SignedState, [PaymentPubKey], [PrivateKey])
+verifiedSignedStateAndKeys parties chan = do
+  wss <- mapM Trace.agentState parties
+  let sks = map (unPaymentPrivateKey . Trace.ownPaymentPrivateKey) wss
+  let pks = map Trace.ownPaymentPublicKey wss
+  return (SignedState (map (signMessage' chan) sks), pks, sks)
 
 -- | Model does not change!
 invariant :: Spec s ()
@@ -329,7 +342,7 @@ requireInvalidTxEndpoint ::
     ContractConstraints s,
     Trace.HasEndpoint l ev s
   ) =>
-  Trace.ContractHandle (Maybe (Semigroup.Last TxId)) s e ->
+  Trace.ContractHandle EvilContractState s e ->
   ev ->
   P.String ->
   SpecificationEmulatorTrace ()

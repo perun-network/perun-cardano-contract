@@ -160,11 +160,10 @@ isValidStateTransition old new =
     && version old < version new
     && not (final old)
 
-{-# INLINEABLE extractVerifiedState #-}
-
 -- | Given a signed state and a list of public keys this returns the channel state `s`,
 -- iff the signed state consists of exactly one valid signature on `s` for every given
 -- public key in the correct order. It throws an error otherwise.
+{-# INLINEABLE extractVerifiedState #-}
 extractVerifiedState :: SignedState -> [PaymentPubKey] -> ChannelState
 extractVerifiedState (SignedState sigs) signingKeys =
   let states =
@@ -221,13 +220,12 @@ mkChannelValidator cID oldDatum action ctx =
           traceIfFalse "funded flag incorrect in output datum" checkFundingStatus
         ]
     Abort ->
-      traceIfFalse "wrong input funding" correctInputFunding
-        &&
-        -- no aborts on funded channels
-        traceIfFalse "channel is already funded" (not $ funded oldDatum)
+      -- no aborts on funded channels
+      traceIfFalse "channel is already funded" (not $ funded oldDatum)
         &&
         -- check the authenticity of the abort to prevent DOS
         traceIfFalse "abort must be issued by channel participant" (any (txSignedBy info . unPaymentPubKeyHash) (pPaymentPKs $ channelParameters oldDatum))
+        && traceIfFalse "wrong input funding" correctInputFunding
         &&
         -- check that every party gets their funding refunded
         traceIfFalse "A party was not reimbursed correctly for their funding" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (funding oldDatum)))
