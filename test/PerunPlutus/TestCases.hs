@@ -2,7 +2,7 @@
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module PerunPlutus.TestCases (runPerunTests) where
+module PerunPlutus.TestCases (perunTests) where
 
 import Data.Tuple.Extra
 import Perun hiding (ChannelAction (..))
@@ -11,6 +11,8 @@ import PerunPlutus.Test.EvilContract
 import Plutus.Contract.Test
 import Plutus.Contract.Test.ContractModel
 import Test.QuickCheck
+import Test.Tasty (TestTree)
+import Test.Tasty.QuickCheck
 
 -- Testcases
 
@@ -246,5 +248,5 @@ return [] -- <- Needed for TemplateHaskell to do some magic and find the propert
 
 -- NOTE: Automatically discovered properties are functions of type `Property`
 -- having a `prop_` prefix!
-runPerunTests :: IO Bool
-runPerunTests = $quickCheckAll
+perunTests :: TestTree
+perunTests = testProperties "Perun Contract" $allProperties
