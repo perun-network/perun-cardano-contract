@@ -171,6 +171,10 @@ threePartyFundingAbortTest (wa, wb, wc) = do
   action $ Fund wb 1 channelID
   action $ Abort wb [wa, wb, wc] channelID
 
+-- | maliciousWalletTest performs various actions that are considered malicious
+-- | as they either try to cheat or otherwise attack the integrity of the 
+-- | on-chain channel state. We assert that the malicious actions do not 
+-- | compromise the channel state, i.e. that nothing happens
 maliciousWalletTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 maliciousWalletTest (wa, wb, wc) = do
   channelID <- forAllQ arbitraryQ
