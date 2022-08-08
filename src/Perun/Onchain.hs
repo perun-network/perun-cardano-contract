@@ -360,14 +360,9 @@ mkChannelValidator cID oldDatum action ctx =
     getsValue :: PaymentPubKeyHash -> Integer -> Bool
     getsValue pkh v =
       (v == 0)
-        || ( let [o] =
-                   [ o'
-                     | o' <- txInfoOutputs info,
-                       txOutValue o' == Ada.lovelaceValueOf v
-                   ]
-              in -- FIXME is it a problem to assume empty stake part of address here?
-                 txOutAddress o == pubKeyHashAddress pkh Nothing
-           )
+        || (let outputsForParty = [o | o <- txInfoOutputs info,
+                                      toPubKeyHash (txOutAddress o) == Just (unPaymentPubKeyHash pkh),
+                                      txOutValue o == Ada.lovelaceValueOf v] in length outputsForParty == 1)
 
 --
 -- COMPILATION TO PLUTUS CORE
