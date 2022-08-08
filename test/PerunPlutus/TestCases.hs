@@ -2,14 +2,17 @@
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module PerunPlutus.TestCases (runPerunTests) where
+module PerunPlutus.TestCases (perunTests) where
 
 import Data.Tuple.Extra
 import Perun hiding (ChannelAction (..))
 import PerunPlutus.PerunSpec
+import PerunPlutus.Test.EvilContract
 import Plutus.Contract.Test
 import Plutus.Contract.Test.ContractModel
 import Test.QuickCheck
+import Test.Tasty (TestTree)
+import Test.Tasty.QuickCheck
 
 -- Testcases
 
@@ -142,8 +145,7 @@ threePartyFundingAndPaymentTest (wa, wb, wc) = do
       (\(cs, _, _, _) -> forAllQ (chooseQ (0, initBalLB)) >>= aPaysB cs)
   action $ Update modChSt
   action Finalize
-  (ChannelState cid _ _ _, _, _, _) <- requireGetChannel "channel must be available after finalization"
-  action $ Close wb [wa, wb, wc] cid
+  action $ Close wb [wa, wb, wc] channelID
 
 -- | twoPartyFundingAbortTest test scenario:
 -- | A starts a channel between A and B providing A's funds,
@@ -168,6 +170,43 @@ threePartyFundingAbortTest (wa, wb, wc) = do
   action $ Start [wa, wb, wc] channelID [initBalA, initBalB, initBalC] defaultTimeLock
   action $ Fund wb 1 channelID
   action $ Abort wb [wa, wb, wc] channelID
+
+-- | maliciousWalletTest performs various actions that are considered malicious
+-- | as they either try to cheat or otherwise attack the integrity of the
+-- | on-chain channel state. We assert that the malicious actions do not
+-- | compromise the channel state, i.e. that nothing happens
+maliciousWalletTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
+maliciousWalletTest (wa, wb, wc) = do
+  channelID <- forAllQ arbitraryQ
+  [initBalA, initBalB] <- forAllQ $ map chooseQ [(initBalLB, initBalUB), (initBalLB, initBalUB)]
+  let chanBals = [initBalA, initBalB]
+  action $ Start [wa, wb] channelID [initBalA, initBalB] defaultTimeLock
+  action $ MaliciousFund 1 wb channelID 1 FundSteal
+  action $ MaliciousFund 1 wb channelID 1 FundViolateChannelIntegrity
+  action $ MaliciousFund 1 wb channelID 1 FundInvalidFunded
+  action $ MaliciousAbort 2 wc channelID AbortUnrelatedParticipant
+  action $ MaliciousClose 1 wb channelID [wa, wb] chanBals CloseUnfunded
+  action $ MaliciousAbort 1 wb channelID AbortInvalidFunding
+  action $ MaliciousForceClose 1 wb channelID ForceCloseInvalidInput
+  action $ MaliciousForceClose 1 wb channelID ForceCloseValidInput
+  action $ MaliciousDispute 1 wb channelID [wa, wb] chanBals DisputeValidInput
+  action $ Fund wb 1 channelID
+  action $ Wait 1
+  action $ MaliciousAbort 1 wb channelID AbortAlreadyFunded
+  action $ MaliciousForceClose 1 wb channelID ForceCloseValidInput
+  action $ MaliciousFund 1 wb channelID 1 FundAlreadyFunded
+  action $ MaliciousClose 1 wb channelID [wa, wb] chanBals CloseInvalidInputValue
+  action $ MaliciousForceClose 1 wb channelID ForceCloseInvalidInput
+  action $ MaliciousDispute 1 wb channelID [wa, wb] chanBals DisputeInvalidInput
+  action $ MaliciousDispute 1 wb channelID [wa, wb] chanBals DisputeValidInput
+  action $ MaliciousDispute 1 wb channelID [wa, wb] chanBals DisputeWrongState
+  modChSt <-
+    requireWithChannel
+      "channel must be available after opening"
+      (\(cs, _, _, _) -> forAllQ (chooseQ (0, initBalLB)) >>= aPaysB cs)
+  action $ Update modChSt
+  action Finalize
+  action $ Close wa [wa, wb] channelID
 
 requireGetChannel :: String -> DL PerunModel (ChannelState, Integer, [Integer], Bool)
 requireGetChannel msg =
@@ -206,9 +245,12 @@ prop_ThreePartyFundingAndPaymentTest = withMaxSuccess 1 $ forAllDL (threePartyFu
 prop_ThreePartyFundingAbortTest :: Property
 prop_ThreePartyFundingAbortTest = withMaxSuccess 1 $ forAllDL (threePartyFundingAbortTest (w1, w2, w3)) propPerun
 
+prop_MaliciousWalletTest :: Property
+prop_MaliciousWalletTest = mapSize (const 42) $ withMaxSuccess 1 $ forAllDL (maliciousWalletTest (w1, w2, w3)) propPerun
+
 return [] -- <- Needed for TemplateHaskell to do some magic and find the property tests.
 
 -- NOTE: Automatically discovered properties are functions of type `Property`
 -- having a `prop_` prefix!
-runPerunTests :: IO Bool
-runPerunTests = $quickCheckAll
+perunTests :: TestTree
+perunTests = testProperties "Perun Contract" $allProperties
