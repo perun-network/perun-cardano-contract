@@ -360,9 +360,12 @@ mkChannelValidator cID oldDatum action ctx =
     getsValue :: PaymentPubKeyHash -> Integer -> Bool
     getsValue pkh v =
       (v == 0)
-        || (let outputsForParty = [o | o <- txInfoOutputs info,
-                                      toPubKeyHash (txOutAddress o) == Just (unPaymentPubKeyHash pkh),
-                                      txOutValue o == Ada.lovelaceValueOf v] in length outputsForParty == 1)
+        || ( let outputsForParty =
+                   [ o | o <- txInfoOutputs info, toPubKeyHash (txOutAddress o) == Just (unPaymentPubKeyHash pkh), txOutValue o == Ada.lovelaceValueOf v
+                   ]
+              in -- FIXME What if there are multiple parties with the same payment key (>= is dangerous though!!)
+                 length outputsForParty == 1
+           )
 
 --
 -- COMPILATION TO PLUTUS CORE
