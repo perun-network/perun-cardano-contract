@@ -224,7 +224,7 @@ instance ContractModel PerunModel where
     modifyContractState
       ( \case
           PerunModel Nothing -> P.error "Finalize only works on existing channels"
-          PerunModel (Just (s, tl, fx, f)) -> PerunModel . Just $ (s {final = True}, tl, fx, f)
+          PerunModel (Just (s, tl, fx, f)) -> PerunModel . Just $ (s {final = True, version = version s + 1}, tl, fx, f)
       )
   nextState (Wait duration) = wait duration
   nextState (MaliciousFund n _ _ _ _) = invariant >> wait n
