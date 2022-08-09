@@ -30,8 +30,11 @@ defaultTimeLockSlots = 15
 defaultTimeLock :: Integer
 defaultTimeLock = 15 * 1000
 
-payoutTest :: (Wallet, Wallet) -> DL PerunModel ()
-payoutTest (wa, wf) = do
+-- | samePartySameValuePayout test checks that the payout validation works if
+-- | one party is represented twice in the channel with both
+-- | representations owning exactly equal balance
+samePartySameValuePayoutTest :: (Wallet, Wallet) -> DL PerunModel ()
+samePartySameValuePayoutTest (wa, wf) = do
   channelID <- forAllQ arbitraryQ
   action $ Open wf [wa, wa] channelID [2_000_000, 2_000_000] defaultTimeLock
   action Finalize
@@ -243,8 +246,8 @@ aPaysB cs@(ChannelState _ bals v _) delta =
 propPerun :: Actions PerunModel -> Property
 propPerun = propRunActions_
 
-prop_payoutTest :: Property
-prop_payoutTest = withMaxSuccess 1 $ forAllDL (payoutTest (w1, w2)) propPerun
+prop_samePartySameValuePayoutTest :: Property
+prop_samePartySameValuePayoutTest = withMaxSuccess 1 $ forAllDL (samePartySameValuePayoutTest (w1, w2)) propPerun
 
 prop_SameValuePayoutTest :: Property
 prop_SameValuePayoutTest = withMaxSuccess 1 $ forAllDL (sameValuePayoutTest (w1, w2, w3)) propPerun
