@@ -46,6 +46,7 @@ import Ledger hiding (singleton)
 import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
 import qualified Ledger.Typed.Scripts as Scripts
+import Ledger.Value (geq)
 import Playground.Contract (ensureKnownCurrencies, printJson, printSchemas, stage)
 import Plutus.Contract.Oracle (SignedMessage, verifySignedMessageConstraints)
 import qualified PlutusTx
@@ -228,7 +229,7 @@ mkChannelValidator cID oldDatum action ctx =
         && traceIfFalse "wrong input funding" correctInputFunding
         &&
         -- check that every party gets their funding refunded
-        traceIfFalse "A party was not reimbursed correctly for their funding" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (funding oldDatum)))
+        traceIfFalse "A party was not reimbursed correctly for their funding" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (map (payoutForPk (funding oldDatum)) (pPaymentPKs (channelParameters oldDatum)))))
     -- Dispute Case:
     MkDispute st ->
       let newState = extractVerifiedState st (pSigningPKs $ channelParameters oldDatum)
@@ -262,7 +263,7 @@ mkChannelValidator cID oldDatum action ctx =
                  traceIfFalse "The closing state is not final" (final newState)
                  &&
                  -- check that A receives their balance
-                 traceIfFalse "A party did not get their balance" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (balances newState)))
+                 traceIfFalse "A party did not get their balance" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (map (payoutForPk (balances newState)) (pPaymentPKs (channelParameters oldDatum)))))
     -- ForceClose Case:
     ForceClose ->
       traceIfFalse "wrong input value" correctInputValue
@@ -275,7 +276,7 @@ mkChannelValidator cID oldDatum action ctx =
         traceIfFalse "too early" correctForceCloseSlotRange
         &&
         -- check that A receives their balance
-        traceIfFalse "A party did not get their balance" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (balances oldState)))
+        traceIfFalse "A party did not get their balance" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (map (payoutForPk (balances oldState)) (pPaymentPKs (channelParameters oldDatum)))))
   where
     info :: TxInfo
     info = scriptContextTxInfo ctx
@@ -347,6 +348,7 @@ mkChannelValidator cID oldDatum action ctx =
     getPOSIXTimeFromUpperBound :: UpperBound POSIXTime -> POSIXTime
     getPOSIXTimeFromUpperBound (UpperBound (Finite t) _) = t
     getPOSIXTimeFromUpperBound _ = traceError "unable to verify time"
+
     allowedValidRangeSize :: Bool
     allowedValidRangeSize = getPOSIXEndTime (strictUpperBound (txInfoValidRange info)) - getPOSIXStartTime (strictLowerBound (txInfoValidRange info)) <= defaultValidMsRange
 
@@ -356,15 +358,22 @@ mkChannelValidator cID oldDatum action ctx =
     correctForceCloseSlotRange :: Bool
     correctForceCloseSlotRange = from (time oldDatum + fromMilliSeconds (DiffMilliSeconds (pTimeLock (channelParameters oldDatum)))) `contains` txInfoValidRange info
 
+    payoutForPk :: [Integer] -> PaymentPubKeyHash -> Integer
+    payoutForPk bals pk =
+      foldl
+        ( \x element -> if fst element == pk then x + snd element else x
+        )
+        0
+        (zip (pPaymentPKs $ channelParameters oldDatum) bals)
+
     -- Returns true if party h is payed value v in an output of the transaction
     getsValue :: PaymentPubKeyHash -> Integer -> Bool
     getsValue pkh v =
       (v == 0)
         || ( let outputsForParty =
-                   [ o | o <- txInfoOutputs info, toPubKeyHash (txOutAddress o) == Just (unPaymentPubKeyHash pkh), txOutValue o == Ada.lovelaceValueOf v
+                   [ o | o <- txInfoOutputs info, toPubKeyHash (txOutAddress o) == Just (unPaymentPubKeyHash pkh)
                    ]
-              in -- FIXME What if there are multiple parties with the same payment key (>= is dangerous though!!)
-                 length outputsForParty == 1
+              in sum (map txOutValue outputsForParty) `geq` Ada.lovelaceValueOf v
            )
 
 --
