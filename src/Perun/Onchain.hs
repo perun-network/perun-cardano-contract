@@ -24,6 +24,7 @@ module Perun.Onchain
     ChannelDatum (..),
     ChannelTypes,
     ChannelID,
+    minAda,
     ensureKnownCurrencies,
     isValidStateTransition,
     extractVerifiedState,
@@ -58,6 +59,9 @@ import qualified Prelude as P
 -- ON CHAIN PART
 --
 --
+
+minAda :: Integer
+minAda = getLovelace minAdaTxOut
 
 type ChannelID = Integer
 
@@ -214,6 +218,8 @@ mkChannelValidator cID oldDatum action ctx =
           traceIfFalse "value of script output does not reflect funding" (correctInputFunding && correctChannelFunding),
           -- check that every funding value increases monotonously
           traceIfFalse "invalid funding" (all (== True) (zipWith (<=) (funding oldDatum) (funding outputDatum))),
+          -- check that every funding value is greater or equal to the minAda requirement
+          traceIfFalse "funding value of less than minimum Ada" (all (>= minAda) (funding outputDatum)),
           -- check that parameters, state, time stay the same, disputed == false
           traceIfFalse "violated channel integrity" channelIntegrityAtFunding,
           -- check that the channel is marked as funded iff it is actually funded
