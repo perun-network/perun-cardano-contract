@@ -358,6 +358,8 @@ mkChannelValidator cID oldDatum action ctx =
     correctForceCloseSlotRange :: Bool
     correctForceCloseSlotRange = from (time oldDatum + fromMilliSeconds (DiffMilliSeconds (pTimeLock (channelParameters oldDatum)))) `contains` txInfoValidRange info
 
+    -- payoutForPk returns the sum of all the balances that belong to pk
+    -- in a given balance distribution for this channel
     payoutForPk :: [Integer] -> PaymentPubKeyHash -> Integer
     payoutForPk bals pk =
       foldl
@@ -366,7 +368,8 @@ mkChannelValidator cID oldDatum action ctx =
         0
         (zip (pPaymentPKs $ channelParameters oldDatum) bals)
 
-    -- Returns true if party h is payed value v in an output of the transaction
+    -- getsValue returns true iff the funds in the output of this transaction
+    -- belonging to pkh sum up to at least v
     getsValue :: PaymentPubKeyHash -> Integer -> Bool
     getsValue pkh v =
       (v == 0)
