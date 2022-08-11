@@ -25,6 +25,7 @@ module Perun.Onchain
     ChannelTypes,
     ChannelID,
     minAda,
+    isLegalOutValue,
     ensureKnownCurrencies,
     isValidStateTransition,
     extractVerifiedState,
@@ -153,6 +154,11 @@ defaultValidMsRange = 10000
 defaultValidMsRangeSkew :: POSIXTime
 defaultValidMsRangeSkew = 1000
 
+-- | isLegalOutValue returns true, iff the given value is either 0 or at least minAda
+{-# INLINEABLE isLegalOutValue #-}
+isLegalOutValue :: Integer -> Bool
+isLegalOutValue v = v == 0 || v >= minAda
+
 -- | Returns true, iff the new state is a valid post-state of the old channel state.
 --  A valid state transition must retain the channelId and the sum of the balances.
 --  The new version number must be greater than the old version number and there is
@@ -219,7 +225,7 @@ mkChannelValidator cID oldDatum action ctx =
           -- check that every funding value increases monotonously
           traceIfFalse "invalid funding" (all (== True) (zipWith (<=) (funding oldDatum) (funding outputDatum))),
           -- check that every funding value is greater or equal to the minAda requirement
-          traceIfFalse "funding value of less than minimum Ada" (all (>= minAda) (funding outputDatum)),
+          traceIfFalse "funding value of less than minimum Ada" (all isLegalOutValue (funding outputDatum)),
           -- check that parameters, state, time stay the same, disputed == false
           traceIfFalse "violated channel integrity" channelIntegrityAtFunding,
           -- check that the channel is marked as funded iff it is actually funded
