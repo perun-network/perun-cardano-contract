@@ -183,7 +183,7 @@ abort (AbortParams cId) = do
       (P.show channelParameters)
       (P.show funding)
 
--- sets the transaction values for forming the initial auction transaction (endpoint start)
+-- alternative way to open a channel "at once" with all funding in place
 open :: OpenParams -> Contract w s Text ()
 open OpenParams {..} = do
   unless (all isLegalOutValue spBalances) . throwError . pack $ printf "Unable to open channel with any balance below minimum Ada"
@@ -257,7 +257,7 @@ dispute (DisputeParams keys sst) = do
   logInfo @P.String $ printf "made dispute of new state %s" (P.show dState)
 
 --
--- close logic
+-- close channel
 --
 
 close :: CloseParams -> Contract w s Text ()
@@ -285,10 +285,6 @@ close (CloseParams keys sst) = do
       channelId
       (P.show channelParameters)
       (P.show balances)
-
---
--- close logic
---
 
 forceClose :: ForceCloseParams -> Contract w s Text ()
 forceClose (ForceCloseParams cId) = do
