@@ -11,6 +11,7 @@ import PerunPlutus.Test.EvilContract
 import Plutus.Contract.Test
 import Plutus.Contract.Test.ContractModel
 import Test.QuickCheck
+import Test.QuickCheck (Property)
 import Test.Tasty (TestTree)
 import Test.Tasty.QuickCheck
 
@@ -28,6 +29,27 @@ defaultTimeLockSlots = 15
 
 defaultTimeLock :: Integer
 defaultTimeLock = 15 * 1000
+
+-- | samePartySameValuePayout test checks that the payout validation works if
+-- | one party is represented twice in the channel with both
+-- | representations owning exactly equal balance
+samePartySameValuePayoutTest :: (Wallet, Wallet) -> DL PerunModel ()
+samePartySameValuePayoutTest (wa, wf) = do
+  channelID <- forAllQ arbitraryQ
+  action $ Open wf [wa, wa] channelID [2_000_000, 2_000_000] defaultTimeLock
+  action Finalize
+  (ChannelState cid _ _ _, _, _, _) <- requireGetChannel "channel must be available after finalization"
+  action $ Close wa [wa, wa] cid
+
+-- | sameValuePayoutTest checks that the payout validation works if there are
+-- | multiple outputs with the same value
+sameValuePayoutTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
+sameValuePayoutTest (wa, wb, wf) = do
+  channelID <- forAllQ arbitraryQ
+  action $ Open wf [wa, wb] channelID [2_000_000, 2_000_000] defaultTimeLock
+  action Finalize
+  (ChannelState cid _ _ _, _, _, _) <- requireGetChannel "channel must be available after finalization"
+  action $ Close wb [wa, wb] cid
 
 -- | honestPaymentTest test scenario:
 -- | a third party opens a channel between A and B,
@@ -223,6 +245,12 @@ aPaysB cs@(ChannelState _ bals v _) delta =
 
 propPerun :: Actions PerunModel -> Property
 propPerun = propRunActions_
+
+prop_samePartySameValuePayoutTest :: Property
+prop_samePartySameValuePayoutTest = withMaxSuccess 1 $ forAllDL (samePartySameValuePayoutTest (w1, w2)) propPerun
+
+prop_SameValuePayoutTest :: Property
+prop_SameValuePayoutTest = withMaxSuccess 1 $ forAllDL (sameValuePayoutTest (w1, w2, w3)) propPerun
 
 prop_HonestPaymentTest :: Property
 prop_HonestPaymentTest = withMaxSuccess 1 $ forAllDL (honestPaymentTest (w1, w2, w3)) propPerun
