@@ -97,8 +97,9 @@ type ChannelSchema =
 -- open channel
 --
 
-start :: AsContractError e => OpenParams -> Contract w s e ()
+start :: OpenParams -> Contract w s Text ()
 start OpenParams {..} = do
+  unless (all isLegalOutValue spBalances) . throwError . pack $ printf "Unable to start channel with any balance below minimum Ada"
   t <- currentTime
   let c =
         Channel
@@ -133,6 +134,7 @@ fund FundParams {..} = do
   (oref, o, d@ChannelDatum {..}) <- findChannel fpChannelId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   -- TODO add more checks before funding
+  unless (all isLegalOutValue (balances state)) . throwError . pack $ printf "Unable to fund channel with any balance below minimum Ada"
   when funded . throwError . pack $ printf "can only fund channel that is not already funded"
   let -- TODO avoid using list-indexing with !!
       --      try to use fixed-sized arrays instead
@@ -162,6 +164,7 @@ abort :: AbortParams -> Contract w s Text ()
 abort (AbortParams cId) = do
   (oref, o, d@ChannelDatum {..}) <- findChannel cId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
+  unless (all isLegalOutValue funding) . throwError . pack $ printf "Unable to abort channel with any funding below minimum Ada"
   when funded . throwError . pack $ printf "can not abort funded channel"
   let r = Redeemer (PlutusTx.toBuiltinData Abort)
       lookups =
@@ -180,9 +183,10 @@ abort (AbortParams cId) = do
       (P.show channelParameters)
       (P.show funding)
 
--- sets the transaction values for forming the initial auction transaction (endpoint start)
-open :: AsContractError e => OpenParams -> Contract w s e ()
+-- alternative way to open a channel "at once" with all funding in place
+open :: OpenParams -> Contract w s Text ()
 open OpenParams {..} = do
+  unless (all isLegalOutValue spBalances) . throwError . pack $ printf "Unable to open channel with any balance below minimum Ada"
   t <- currentTime
   let c =
         Channel
@@ -222,6 +226,7 @@ dispute (DisputeParams keys sst) = do
   t <- currentTime
   (oref, o, d@ChannelDatum {..}) <- findChannel $ channelId dState
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
+  unless (all isLegalOutValue (balances dState)) . throwError . pack $ printf "Unable to dispute channel with a state that contains any illegal balance (minAda)"
   unless (isValidStateTransition state dState)
     . throwError
     . pack
@@ -252,7 +257,7 @@ dispute (DisputeParams keys sst) = do
   logInfo @P.String $ printf "made dispute of new state %s" (P.show dState)
 
 --
--- close logic
+-- close channel
 --
 
 close :: CloseParams -> Contract w s Text ()
@@ -260,6 +265,7 @@ close (CloseParams keys sst) = do
   let s@ChannelState {..} = extractVerifiedState sst keys
   (oref, o, d@ChannelDatum {..}) <- findChannel channelId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
+  unless (all isLegalOutValue balances) . throwError . pack $ printf "Unable to close channel with any balance below minimum Ada"
   unless (isValidStateTransition state s) . throwError . pack $ printf "state transition invalid"
   unless final . throwError . pack $ printf "can not close unless state is final"
   unless funded . throwError . pack $ printf "can only close funded state"
@@ -280,14 +286,11 @@ close (CloseParams keys sst) = do
       (P.show channelParameters)
       (P.show balances)
 
---
--- close logic
---
-
 forceClose :: ForceCloseParams -> Contract w s Text ()
 forceClose (ForceCloseParams cId) = do
   (oref, o, d@ChannelDatum {..}) <- findChannel cId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
+  unless (all isLegalOutValue (balances state)) . throwError . pack $ printf "Unable to force-close channel with any balance below minimum Ada"
   unless disputed . throwError . pack $ printf "channel was never in disputed state"
   unless funded . throwError . pack $ printf "can only force-close funded state"
   let r = Redeemer (PlutusTx.toBuiltinData ForceClose)

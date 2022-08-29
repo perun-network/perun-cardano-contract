@@ -19,7 +19,7 @@ import Test.Tasty.QuickCheck
 
 -- Testconfiguration
 initBalLB :: Integer
-initBalLB = 5_000_000
+initBalLB = minAda * 3
 
 initBalUB :: Integer
 initBalUB = 5 * initBalLB
@@ -28,7 +28,7 @@ defaultTimeLockSlots :: Integer
 defaultTimeLockSlots = 15
 
 defaultTimeLock :: Integer
-defaultTimeLock = 15 * 1000
+defaultTimeLock = defaultTimeLockSlots * 1000
 
 -- | samePartySameValuePayout test checks that the payout validation works if
 -- | one party is represented twice in the channel with both
@@ -36,7 +36,7 @@ defaultTimeLock = 15 * 1000
 samePartySameValuePayoutTest :: (Wallet, Wallet) -> DL PerunModel ()
 samePartySameValuePayoutTest (wa, wf) = do
   channelID <- forAllQ arbitraryQ
-  action $ Open wf [wa, wa] channelID [2_000_000, 2_000_000] defaultTimeLock
+  action $ Open wf [wa, wa] channelID [minAda, minAda] defaultTimeLock
   action Finalize
   (ChannelState cid _ _ _, _, _, _) <- requireGetChannel "channel must be available after finalization"
   action $ Close wa [wa, wa] cid
@@ -46,7 +46,7 @@ samePartySameValuePayoutTest (wa, wf) = do
 sameValuePayoutTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 sameValuePayoutTest (wa, wb, wf) = do
   channelID <- forAllQ arbitraryQ
-  action $ Open wf [wa, wb] channelID [2_000_000, 2_000_000] defaultTimeLock
+  action $ Open wf [wa, wb] channelID [minAda, minAda] defaultTimeLock
   action Finalize
   (ChannelState cid _ _ _, _, _, _) <- requireGetChannel "channel must be available after finalization"
   action $ Close wb [wa, wb] cid
@@ -63,7 +63,7 @@ honestPaymentTest (wa, wb, wf) = do
   modChSt <-
     requireWithChannel
       "channel must be available after opening"
-      (\(cs, _, _, _) -> forAllQ (chooseQ (0, initBalLB)) >>= aPaysB cs)
+      (\(cs, _, _, _) -> forAllQ (chooseQ (0, initBalA - minAda)) >>= aPaysB cs)
   action $ Update modChSt
   action Finalize
   (ChannelState cid _ _ _, _, _, _) <- requireGetChannel "channel must be available after finalization"
@@ -85,7 +85,7 @@ singleDisputeTest (wa, wb, wf) = do
   modChSt <-
     requireWithChannel
       "channel must be available after opening"
-      (\(cs, _, _, _) -> forAllQ (chooseQ (0, initBalLB)) >>= aPaysB cs)
+      (\(cs, _, _, _) -> forAllQ (chooseQ (0, initBalA - minAda)) >>= aPaysB cs)
   action $ Update modChSt
   action $ Dispute wb [wa, wb] channelID modChSt
   action $ Wait defaultTimeLockSlots
@@ -108,14 +108,14 @@ maliciousDisputeTest (wa, wb, wf) = do
   firstUpdate <-
     requireGetChannel "channel must be available after opening"
       >>= ( \(cs, _, _, _) ->
-              forAllQ (chooseQ (0, initBalLB `div` 2))
+              forAllQ (chooseQ (0, (initBalA - minAda) `div` 2))
                 >>= aPaysB cs
           )
   action $ Update firstUpdate
   secondUpdate <-
     requireGetChannel "channel must be available after opening"
       >>= ( \(cs, _, _, _) ->
-              forAllQ (chooseQ (0, initBalLB `div` 2))
+              forAllQ (chooseQ (0, (initBalA - minAda) `div` 2))
                 >>= aPaysB cs
           )
   action $ Update secondUpdate
@@ -141,7 +141,7 @@ twoPartyFundingAndPaymentTest (wa, wb) = do
   modChSt <-
     requireWithChannel
       "channel must be available after opening"
-      (\(cs, _, _, _) -> forAllQ (chooseQ (0, initBalLB)) >>= aPaysB cs)
+      (\(cs, _, _, _) -> forAllQ (chooseQ (0, initBalA - minAda)) >>= aPaysB cs)
   action $ Update modChSt
   action Finalize
   (ChannelState cid _ _ _, _, _, _) <- requireGetChannel "channel must be available after finalization"
@@ -164,7 +164,7 @@ threePartyFundingAndPaymentTest (wa, wb, wc) = do
   modChSt <-
     requireWithChannel
       "channel must be available after opening"
-      (\(cs, _, _, _) -> forAllQ (chooseQ (0, initBalLB)) >>= aPaysB cs)
+      (\(cs, _, _, _) -> forAllQ (chooseQ (0, initBalA - minAda)) >>= aPaysB cs)
   action $ Update modChSt
   action Finalize
   action $ Close wb [wa, wb, wc] channelID
@@ -225,7 +225,7 @@ maliciousWalletTest (wa, wb, wc) = do
   modChSt <-
     requireWithChannel
       "channel must be available after opening"
-      (\(cs, _, _, _) -> forAllQ (chooseQ (0, initBalLB)) >>= aPaysB cs)
+      (\(cs, _, _, _) -> forAllQ (chooseQ (0, initBalA - minAda)) >>= aPaysB cs)
   action $ Update modChSt
   action Finalize
   action $ Close wa [wa, wb] channelID
