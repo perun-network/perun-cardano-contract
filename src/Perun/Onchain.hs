@@ -10,6 +10,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -54,6 +55,7 @@ import Playground.Contract (ensureKnownCurrencies, printJson, printSchemas, stag
 import Plutus.Contract.Oracle (SignedMessage, verifySignedMessageConstraints)
 import qualified PlutusTx
 import PlutusTx.Prelude hiding (unless)
+import Schema (FormSchema (..), ToSchema (..))
 import qualified Prelude as P
 
 --
@@ -92,7 +94,7 @@ data ChannelState = ChannelState
     version :: !Integer,
     final :: !Bool
   }
-  deriving (Data, Generic, ToJSON, FromJSON)
+  deriving (Data, Generic, ToJSON, FromJSON, ToSchema)
   deriving stock (P.Eq, P.Show)
 
 instance Eq ChannelState where
@@ -116,6 +118,9 @@ newtype SignedState = SignedState
 instance Eq SignedState where
   {-# INLINEABLE (==) #-}
   a == b = stateSigs a == stateSigs b
+
+instance ToSchema SignedState where
+  toSchema = FormSchemaArray (toSchema @(Signature, (DatumHash, ChannelState)))
 
 PlutusTx.unstableMakeIsData ''SignedState
 PlutusTx.makeLift ''SignedState

@@ -25,6 +25,7 @@ import GHC.Generics (Generic)
 import Ledger hiding (singleton)
 import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
+import Ledger.Scripts
 import Perun.Onchain
 import Plutus.Contract
 import qualified PlutusTx
@@ -61,7 +62,7 @@ data FundParams = FundParams
   deriving stock (P.Eq, P.Show)
 
 newtype AbortParams = AbortParams ChannelID
-  deriving newtype (ToJSON, FromJSON)
+  deriving newtype (ToJSON, FromJSON, ToSchema)
   deriving (Generic)
   deriving stock (P.Eq, P.Show)
 
@@ -69,18 +70,18 @@ data DisputeParams = DisputeParams
   { dpSigningPKs :: ![PaymentPubKey],
     dpSignedState :: !SignedState
   }
-  deriving (Generic, ToJSON, FromJSON)
+  deriving (Generic, ToJSON, FromJSON, ToSchema)
   deriving stock (P.Eq, P.Show)
 
 data CloseParams = CloseParams
   { cpSigningPKs :: ![PaymentPubKey],
     cpSignedState :: !SignedState
   }
-  deriving (Generic, ToJSON, FromJSON)
+  deriving (Generic, ToJSON, FromJSON, ToSchema)
   deriving stock (P.Eq, P.Show)
 
 newtype ForceCloseParams = ForceCloseParams ChannelID
-  deriving newtype (ToJSON, FromJSON)
+  deriving newtype (ToJSON, FromJSON, ToSchema)
   deriving (Generic)
   deriving stock (P.Eq, P.Show)
 
