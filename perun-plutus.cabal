@@ -55,6 +55,14 @@ executable perun-client
                     , plutus-ledger
                     , data-default
                     , openapi3
+                    , servant-client
+                    , servant-client-core
+                    , http-client
+                    , optparse-applicative
+                    , cardano-crypto
+                    , cardano-wallet-core
+                    , text
+                    , text-class
   main-is:          Main.hs
 
 executable perun-pab
@@ -77,6 +85,7 @@ library
     exposed-modules: Perun
                    , Perun.Onchain
                    , Perun.Offchain
+                   , PAB
 
     -- Modules included in this library but not exported.
     -- other-modules:
@@ -87,6 +96,7 @@ library
                       , aeson
                       , bytestring
                       , cardano-api
+                      , prettyprinter
                       , containers
                       , data-default
                       , plutus-contract
@@ -99,6 +109,7 @@ library
                       , serialise
                       , text
                       , openapi3
+                      , plutus-pab
     hs-source-dirs:   src
 
 test-suite perun-plutus-test
