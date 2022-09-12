@@ -42,9 +42,24 @@ common shared
                     --
                     -- -dynamic
 
+executable perun-client
+  import:           shared
+  hs-source-dirs:   app/Client
+  build-depends:    perun-plutus
+                    , plutus-contract
+                    , plutus-pab
+                    , aeson
+                    , freer-simple
+                    , prettyprinter
+                    , freer-extras
+                    , plutus-ledger
+                    , data-default
+                    , openapi3
+  main-is:          Main.hs
+
 executable perun-pab
   import:           shared
-  hs-source-dirs:   app
+  hs-source-dirs:   app/PAB
   build-depends:    perun-plutus
                     , plutus-contract
                     , plutus-pab
