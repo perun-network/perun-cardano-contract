@@ -47,6 +47,7 @@ import GHC.Generics (Generic)
 import Ledger hiding (singleton)
 import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
+import Ledger.Scripts
 import qualified Ledger.Typed.Scripts as Scripts
 import Ledger.Value (geq)
 import Playground.Contract (ensureKnownCurrencies, printJson, printSchemas, stage)
@@ -402,12 +403,12 @@ typedChannelValidator cID =
     ($$(PlutusTx.compile [||mkChannelValidator||]) `PlutusTx.applyCode` PlutusTx.liftCode cID)
     $$(PlutusTx.compile [||wrap||])
   where
-    wrap = Scripts.wrapValidator @ChannelDatum @ChannelAction
+    wrap = Scripts.mkUntypedValidator @ChannelDatum @ChannelAction
 
 channelValidator :: ChannelID -> Validator
 channelValidator = Scripts.validatorScript . typedChannelValidator
 
-channelHash :: ChannelID -> Ledger.ValidatorHash
+channelHash :: ChannelID -> ValidatorHash
 channelHash = Scripts.validatorHash . typedChannelValidator
 
 channelAddress :: ChannelID -> Ledger.Address
