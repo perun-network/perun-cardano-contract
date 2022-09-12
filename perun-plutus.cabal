@@ -42,6 +42,21 @@ common shared
                     --
                     -- -dynamic
 
+executable perun-pab
+  import:           shared
+  hs-source-dirs:   app
+  build-depends:    perun-plutus
+                    , plutus-contract
+                    , plutus-pab
+                    , aeson
+                    , freer-simple
+                    , prettyprinter
+                    , freer-extras
+                    , plutus-ledger
+                    , data-default
+                    , openapi3
+  main-is:          Main.hs
+
 library
     import: shared
     exposed-modules: Perun
@@ -68,6 +83,7 @@ library
                       , lens
                       , serialise
                       , text
+                      , openapi3
     hs-source-dirs:   src
 
 test-suite perun-plutus-test
