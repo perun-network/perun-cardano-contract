@@ -35,7 +35,7 @@ import Plutus.PAB.Types (Config (..), WebserverConfig (..), defaultWebServerConf
 import Plutus.PAB.Webserver.Client (InstanceClient (..), PabClient (..), pabClient)
 import Plutus.PAB.Webserver.Types (ContractActivationArgs (..))
 import Servant.Client (ClientError (..), mkClientEnv, runClientM)
-import Servant.Client.Core.BaseUrl (BaseUrl (..), Scheme (..))
+import Servant.Client.Core.BaseUrl (BaseUrl (..), Scheme (..), showBaseUrl)
 import System.Exit
 import Wallet.Emulator.Wallet (Wallet (..), WalletId (..))
 
@@ -72,7 +72,7 @@ defaultPabConfig :: Config
 defaultPabConfig = def
 
 defaultBalance :: Integer
-defaultBalance = 100_000
+defaultBalance = 100_000_000
 
 main :: IO ()
 main = execParser opts >>= main'
@@ -133,7 +133,7 @@ main' (CLA myWallet peerWallet) = do
       (_, endpointUrlB) = Link.getAccountKey @'Shelley (ApiT (walletId peerWallet)) (Just Extended)
   eitherPubKeys <-
     mapM
-      ( parseRequest . unpack >=> httpJSON @IO @ApiAccountKey
+      ( parseRequest . unpack . ((pack (showBaseUrl walletUrl) <> "/") <>) >=> httpJSON @IO @ApiAccountKey
           >=> return
             . xpub
             . getApiAccountKey
@@ -160,7 +160,6 @@ main' (CLA myWallet peerWallet) = do
 
   print @String "started contract instance:"
   print cid
-  _ <- exitSuccess
 
   -- Create client allowing to call endpoints on `PerunContract`.
   let InstanceClient {callInstanceEndpoint} = instanceClient cid
@@ -188,4 +187,4 @@ main' (CLA myWallet peerWallet) = do
       uct@(UnsupportedContentType _ _) -> print uct >> exitFailure
       icth@(InvalidContentTypeHeader _) -> print icth >> exitFailure
       cerr@(ConnectionError _) -> print cerr >> exitFailure
-    Right _ -> print ("successfully started channel with channelID: " <> (show . spChannelId $ openParams))
+    Right _ -> print ("successfully requested open for channel with ID: " <> (show . spChannelId $ openParams))
