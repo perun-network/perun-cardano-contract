@@ -11,28 +11,31 @@ module Main where
 
 import qualified Cardano.Api as Api
 import qualified Cardano.Api.Shelley as Api
+import Cardano.Crypto.Wallet (xpub)
 import Cardano.Wallet.Api.Client (AddressClient (..), addressClient)
 import qualified Cardano.Wallet.Api.Link as Link
-import Cardano.Wallet.Api.Types as AT (ApiAccountKey (..), ApiAddress (..), ApiT (..), WalletStyle (..))
+import Cardano.Wallet.Api.Types as AT (ApiAccountKey (..), ApiAddress (..), ApiT (..), KeyFormat (..), WalletStyle (..))
 import Cardano.Wallet.Primitive.AddressDerivation (NetworkDiscriminant (..))
 import qualified Cardano.Wallet.Primitive.Types as Types
 import Cardano.Wallet.Primitive.Types.Address (Address (..))
 import Cardano.Wallet.Shelley.Compatibility ()
+import Control.Monad ((>=>))
 import Data.Aeson (Result (..), fromJSON, toJSON)
 import Data.Default
+import Data.Either
 import Data.Text (pack, unpack)
-import Data.Text.Class (fromText, toText)
+import Data.Text.Class (fromText)
+import Ledger (PaymentPubKey (..), PaymentPubKeyHash (..), xPubToPublicKey)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Simple
-import Data.Functor ((<&>))
 import Options.Applicative hiding (Success)
 import PAB (StarterContracts (..))
 import Perun.Offchain (OpenParams (..))
 import Plutus.PAB.Types (Config (..), WebserverConfig (..), defaultWebServerConfig)
 import Plutus.PAB.Webserver.Client (InstanceClient (..), PabClient (..), pabClient)
 import Plutus.PAB.Webserver.Types (ContractActivationArgs (..))
-import Servant.Client (ClientEnv (..), ClientError (..), mkClientEnv, runClientM)
-import Servant.Client.Core.BaseUrl (BaseUrl (..), Scheme (..), showBaseUrl)
+import Servant.Client (ClientError (..), mkClientEnv, runClientM)
+import Servant.Client.Core.BaseUrl (BaseUrl (..), Scheme (..))
 import System.Exit
 import Wallet.Emulator.Wallet (Wallet (..), WalletId (..))
 
@@ -100,34 +103,44 @@ main' (CLA myWallet peerWallet) = do
   let AddressClient {listAddresses} = addressClient
       myCl = listAddresses (ApiT (walletId myWallet)) Nothing
       pCl = listAddresses (ApiT (walletId peerWallet)) Nothing
-  resA <-
-    runClientM myCl walletEnv >>= \case
-      Left err -> print err >> exitFailure
-      Right (v : _) -> return v
-      Right _ -> print @String "No addresses associated with given wallet" >> exitFailure
-  resB <-
-    runClientM pCl walletEnv >>= \case
-      Left err -> print err >> exitFailure
-      Right (v : _) -> return v
-      Right _ -> print @String "No addresses associated with given wallet" >> exitFailure
+  resultAddresses <-
+    mapM
+      ( \i ->
+          runClientM i walletEnv >>= \case
+            Left err -> print err >> exitFailure
+            Right (v : _) -> return . fromJSON @(ApiAddress n) $ v
+            Right _ -> print @String "No addresses associated with given wallet" >> exitFailure
+      )
+      [myCl, pCl]
+  addresses <-
+    mapM
+      ( \case
+          Success addr -> return . Api.deserialiseFromRawBytes Api.AsShelleyAddress . unAddress . addressFromApi $ addr
+          Error s -> print s >> exitFailure
+      )
+      resultAddresses
+  pubKeyHashes <-
+    mapM
+      ( \case
+          Just x -> case Api.shelleyPayAddrToPlutusPubKHash x of
+            Just pkh -> return . PaymentPubKeyHash $ pkh
+            Nothing -> print @String "unable to derive PubKeyHash" >> exitFailure
+          Nothing -> print @String "unable to derive PubKeyHash" >> exitFailure
+      )
+      addresses
 
-  print resA
-  res <- case fromJSON @(ApiAddress n) resA of
-    Success r -> return r
-    Error s -> print s >> exitFailure
-  let y = addressFromApi res
-      Just x = Api.deserialiseFromRawBytes Api.AsShelleyAddress (unAddress y)
-      Just pkh = Api.shelleyPayAddrToPlutusPubKHash x
-      lol@(m, ttt) = Link.getAccountKey @'Shelley (ApiT (walletId myWallet)) Nothing
-  -- TODO: cardano-node/cardano-api/Cardano/Api/Address.hs
-  print (pack (showBaseUrl walletUrl) <> "/" <> ttt)
-  let rofl = unpack (pack (showBaseUrl walletUrl) <> "/" <> ttt)
-  req <- parseRequest rofl
-  r <- httpJSON @IO @ApiAccountKey req <&> getResponseBody
-  print r
-  print lol
-  print pkh
-  _ <- exitSuccess
+  let (_, endpointUrlA) = Link.getAccountKey @'Shelley (ApiT (walletId myWallet)) (Just Extended)
+      (_, endpointUrlB) = Link.getAccountKey @'Shelley (ApiT (walletId peerWallet)) (Just Extended)
+  eitherPubKeys <-
+    mapM
+      ( parseRequest . unpack >=> httpJSON @IO @ApiAccountKey
+          >=> return
+            . xpub
+            . getApiAccountKey
+            . getResponseBody
+      )
+      [endpointUrlA, endpointUrlB]
+  let paymentPubKeys = map (PaymentPubKey . xPubToPublicKey) (rights eitherPubKeys)
 
   -- Activate contract.
   let ca =
@@ -152,19 +165,19 @@ main' (CLA myWallet peerWallet) = do
   -- Create client allowing to call endpoints on `PerunContract`.
   let InstanceClient {callInstanceEndpoint} = instanceClient cid
       callStart = callInstanceEndpoint "start"
-      callFund = callInstanceEndpoint "fund"
-      callAbort = callInstanceEndpoint "abort"
-      callOpen = callInstanceEndpoint "open"
-      callDispute = callInstanceEndpoint "dispute"
-      callClose = callInstanceEndpoint "close"
-      callForceClose = callInstanceEndpoint "forceClose"
+      -- callFund = callInstanceEndpoint "fund"
+      -- callAbort = callInstanceEndpoint "abort"
+      -- callOpen = callInstanceEndpoint "open"
+      -- callDispute = callInstanceEndpoint "dispute"
+      -- callClose = callInstanceEndpoint "close"
+      -- callForceClose = callInstanceEndpoint "forceClose"
 
       -- Start a channel.
       openParams =
         OpenParams
           { spChannelId = 42069, -- TODO: Hardcoded...
-            spSigningPKs = undefined, -- [myPk, ppk],
-            spPaymentPKs = undefined, -- map (PaymentPubKeyHash . Crypto.pubKeyHash) [myPk, ppk],
+            spSigningPKs = paymentPubKeys,
+            spPaymentPKs = pubKeyHashes,
             spBalances = [defaultBalance, defaultBalance],
             spTimeLock = defaultTimeLock
           }
