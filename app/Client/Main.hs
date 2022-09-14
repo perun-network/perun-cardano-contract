@@ -1,27 +1,38 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
 module Main where
 
+import qualified Cardano.Api as Api
+import qualified Cardano.Api.Shelley as Api
 import Cardano.Wallet.Api.Client (AddressClient (..), addressClient)
-import Cardano.Wallet.Api.Types (ApiT (..))
+import qualified Cardano.Wallet.Api.Link as Link
+import Cardano.Wallet.Api.Types as AT (ApiAccountKey (..), ApiAddress (..), ApiT (..), WalletStyle (..))
+import Cardano.Wallet.Primitive.AddressDerivation (NetworkDiscriminant (..))
 import qualified Cardano.Wallet.Primitive.Types as Types
-import Data.Aeson (toJSON)
+import Cardano.Wallet.Primitive.Types.Address (Address (..))
+import Cardano.Wallet.Shelley.Compatibility ()
+import Data.Aeson (Result (..), fromJSON, toJSON)
 import Data.Default
-import Data.Text (pack)
-import Data.Text.Class (fromText)
+import Data.Text (pack, unpack)
+import Data.Text.Class (fromText, toText)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Options.Applicative
+import Network.HTTP.Simple
+import Data.Functor ((<&>))
+import Options.Applicative hiding (Success)
 import PAB (StarterContracts (..))
 import Perun.Offchain (OpenParams (..))
 import Plutus.PAB.Types (Config (..), WebserverConfig (..), defaultWebServerConfig)
 import Plutus.PAB.Webserver.Client (InstanceClient (..), PabClient (..), pabClient)
 import Plutus.PAB.Webserver.Types (ContractActivationArgs (..))
-import Servant.Client (ClientError (..), mkClientEnv, runClientM)
-import Servant.Client.Core.BaseUrl (BaseUrl (..), Scheme (..))
+import Servant.Client (ClientEnv (..), ClientError (..), mkClientEnv, runClientM)
+import Servant.Client.Core.BaseUrl (BaseUrl (..), Scheme (..), showBaseUrl)
 import System.Exit
 import Wallet.Emulator.Wallet (Wallet (..), WalletId (..))
 
@@ -71,7 +82,10 @@ main = execParser opts >>= main'
 walletId :: Wallet -> Types.WalletId
 walletId (Wallet _ (WalletId wid)) = wid
 
-main' :: CmdLineArgs -> IO ()
+addressFromApi :: ApiAddress n -> Address
+addressFromApi = getApiT . fst . AT.id
+
+main' :: forall n. (n ~ 'Testnet 42) => CmdLineArgs -> IO ()
 main' (CLA myWallet peerWallet) = do
   -- Get parameters to establish connection.
   mgr <- newManager defaultManagerSettings
@@ -89,11 +103,31 @@ main' (CLA myWallet peerWallet) = do
   resA <-
     runClientM myCl walletEnv >>= \case
       Left err -> print err >> exitFailure
-      Right v -> return v
-  resB <- runClientM pCl walletEnv
+      Right (v : _) -> return v
+      Right _ -> print @String "No addresses associated with given wallet" >> exitFailure
+  resB <-
+    runClientM pCl walletEnv >>= \case
+      Left err -> print err >> exitFailure
+      Right (v : _) -> return v
+      Right _ -> print @String "No addresses associated with given wallet" >> exitFailure
 
   print resA
-  print resB
+  res <- case fromJSON @(ApiAddress n) resA of
+    Success r -> return r
+    Error s -> print s >> exitFailure
+  let y = addressFromApi res
+      Just x = Api.deserialiseFromRawBytes Api.AsShelleyAddress (unAddress y)
+      Just pkh = Api.shelleyPayAddrToPlutusPubKHash x
+      lol@(m, ttt) = Link.getAccountKey @'Shelley (ApiT (walletId myWallet)) Nothing
+  -- TODO: cardano-node/cardano-api/Cardano/Api/Address.hs
+  print (pack (showBaseUrl walletUrl) <> "/" <> ttt)
+  let rofl = unpack (pack (showBaseUrl walletUrl) <> "/" <> ttt)
+  req <- parseRequest rofl
+  r <- httpJSON @IO @ApiAccountKey req <&> getResponseBody
+  print r
+  print lol
+  print pkh
+  _ <- exitSuccess
 
   -- Activate contract.
   let ca =
@@ -111,7 +145,7 @@ main' (CLA myWallet peerWallet) = do
       Left err -> print err >> exitFailure
       Right cid -> return cid
 
-  print "started contract instance:"
+  print @String "started contract instance:"
   print cid
   _ <- exitSuccess
 

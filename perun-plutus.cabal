@@ -61,8 +61,11 @@ executable perun-client
                     , optparse-applicative
                     , cardano-crypto
                     , cardano-wallet-core
+                    , cardano-wallet
+                    , cardano-api
                     , text
                     , text-class
+                    , http-conduit
   main-is:          Main.hs
 
 executable perun-pab
