@@ -25,7 +25,7 @@ import Data.Default
 import Data.Either
 import Data.Text (pack, unpack)
 import Data.Text.Class (fromText)
-import Ledger (PaymentPubKey (..), PaymentPubKeyHash (..), xPubToPublicKey)
+import Ledger (PaymentPubKey (..), PaymentPubKeyHash (..), paymentPubKeyHash, xPubToPublicKey)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Simple
 import Options.Applicative hiding (Success)
@@ -170,6 +170,8 @@ main' (CLA myWallet peerWallet) = do
       -- callDispute = callInstanceEndpoint "dispute"
       -- callClose = callInstanceEndpoint "close"
       -- callForceClose = callInstanceEndpoint "forceClose"
+      callDummy = callInstanceEndpoint "dummy"
+      callDummyPayment = callInstanceEndpoint "dummyPayment"
 
       -- Start a channel.
       openParams =
@@ -180,11 +182,21 @@ main' (CLA myWallet peerWallet) = do
             spBalances = [defaultBalance, defaultBalance],
             spTimeLock = defaultTimeLock
           }
-  runClientM (callStart . toJSON $ openParams) clientEnv >>= \case
+      dummyParams = 1 :: Integer
+  runClientM (callDummyPayment . toJSON $ paymentPubKeyHash (paymentPubKeys !! 1)) clientEnv >>= \case
     Left ce -> case ce of
       f@(FailureResponse _ _) -> print f >> exitFailure
       d@(DecodeFailure _ _) -> print d >> exitFailure
       uct@(UnsupportedContentType _ _) -> print uct >> exitFailure
-      icth@(InvalidContentTypeHeader _) -> print icth >> exitFailure
+      icht@(InvalidContentTypeHeader _) -> print icht >> exitFailure
       cerr@(ConnectionError _) -> print cerr >> exitFailure
-    Right _ -> print ("successfully requested open for channel with ID: " <> (show . spChannelId $ openParams))
+    Right _ -> print "successfully made dummy payment"
+
+-- runClientM (callStart . toJSON $ openParams) clientEnv >>= \case
+--   Left ce -> case ce of
+--     f@(FailureResponse _ _) -> print f >> exitFailure
+--     d@(DecodeFailure _ _) -> print d >> exitFailure
+--     uct@(UnsupportedContentType _ _) -> print uct >> exitFailure
+--     icth@(InvalidContentTypeHeader _) -> print icth >> exitFailure
+--     cerr@(ConnectionError _) -> print cerr >> exitFailure
+--   Right _ -> print ("successfully requested open for channel with ID: " <> (show . spChannelId $ openParams))

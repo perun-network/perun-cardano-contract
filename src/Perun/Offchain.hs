@@ -6,6 +6,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -93,6 +94,47 @@ type ChannelSchema =
     .\/ Endpoint "dispute" DisputeParams
     .\/ Endpoint "close" CloseParams
     .\/ Endpoint "forceClose" ForceCloseParams
+    .\/ Endpoint "dummy" Integer
+    .\/ Endpoint "dummyPayment" PaymentPubKeyHash
+
+dummy :: Integer -> Contract w s Text ()
+dummy cid = do
+  logInfo @P.String $ printf "Dummy: Started dummy endpoint"
+  let c =
+        Channel
+          { pTimeLock = 1,
+            pSigningPKs = [],
+            pPaymentPKs = []
+          }
+      s =
+        ChannelState
+          { channelId = cid,
+            balances = [],
+            version = 0,
+            final = False
+          }
+      d =
+        ChannelDatum
+          { channelParameters = c,
+            state = s,
+            time = 1,
+            funding = [],
+            funded = False,
+            disputed = False
+          }
+      v = Ada.lovelaceValueOf minAda
+      tx = Constraints.mustPayToTheScript d v
+  ledgerTx <- submitTxConstraints (typedChannelValidator cid) tx
+  logInfo @P.String $ printf "Dummy: Done submitTxConstraints"
+  void . awaitTxConfirmed $ getCardanoTxId ledgerTx
+  logInfo @P.String $ printf "Dummy: Finished dummy endpoint"
+
+dummyPayment :: PaymentPubKeyHash -> Contract w s Text ()
+dummyPayment key = do
+  let txConstr =
+        Constraints.mustPayToPubKey key (Ada.lovelaceValueOf 10_000_000)
+  ledgerTx <- submitTx txConstr
+  void . awaitTxConfirmed $ getCardanoTxId ledgerTx
 
 --
 -- open channel
@@ -339,7 +381,7 @@ addFunding amount index f =
 -- Top-level contract, exposing all endpoints.
 --
 contract :: Contract () ChannelSchema Text ()
-contract = selectList [start', fund', abort', open', dispute', close', forceClose'] >> contract
+contract = selectList [start', fund', abort', open', dispute', close', forceClose', dummy', dummyPayment'] >> contract
   where
     start' = endpoint @"start" start
     fund' = endpoint @"fund" fund
@@ -348,3 +390,5 @@ contract = selectList [start', fund', abort', open', dispute', close', forceClos
     dispute' = endpoint @"dispute" dispute
     close' = endpoint @"close" close
     forceClose' = endpoint @"forceClose" forceClose
+    dummy' = endpoint @"dummy" dummy
+    dummyPayment' = endpoint @"dummyPayment" dummyPayment

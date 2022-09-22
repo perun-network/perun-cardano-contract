@@ -1,0 +1,45 @@
+
+84  # list(4)
+   a3  # map(3)
+       # key
+      00  # int(0)
+       # value
+      81  # list(1)
+         82  # list(2)
+            58 20 01 3a 22 04 5f 40 a1 b2 9e d1 7c 65 56 f3 
+            f3 1b 68 b4 ba 7f 43 59 88 be ee 92 78 90 17 73 
+            cf e3  # bytes(32)
+            01  # int(1)
+       # key
+      01  # int(1)
+       # value
+      82  # list(2)
+         a2  # map(2)
+             # key
+            00  # int(0)
+             # value
+            58 1d 60 a0 f9 34 4e c5 70 76 f7 5f b6 b0 2c 57 
+            b6 8b 91 f3 c5 b4 20 e3 98 4a c6 24 46 46 a0  # bytes(29)
+             # key
+            01  # int(1)
+             # value
+            1a 00 98 96 80  # int(10000000)
+         a2  # map(2)
+             # key
+            00  # int(0)
+             # value
+            58 39 00 b2 80 99 89 3c 8b e0 38 83 2c 85 ea 76 
+            47 4d 26 23 f7 ca 64 cc 8e 24 a8 35 ca 03 9b b5 
+            55 f4 5c 13 e9 eb 6a 8a 63 38 2a 1f 20 61 5d ae 
+            ea e8 cc 66 74 6f 3f f1 d8 2a 24  # bytes(57)
+             # key
+            01  # int(1)
+             # value
+            1a 18 6f 99 90  # int(409966992)
+       # key
+      02  # int(2)
+       # value
+      1a 00 02 8b 79  # int(166777)
+   a0  # map(0)
+   f5  # bool(true)
+   f6  # null
