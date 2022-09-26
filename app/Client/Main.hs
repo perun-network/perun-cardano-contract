@@ -20,7 +20,7 @@ import qualified Cardano.Wallet.Primitive.Types as Types
 import Cardano.Wallet.Primitive.Types.Address (Address (..))
 import Cardano.Wallet.Shelley.Compatibility ()
 import Control.Monad ((>=>))
-import Data.Aeson (Result (..), fromJSON, toJSON)
+import Data.Aeson (Result (..), fromJSON, toJSON, encode)
 import Data.Default
 import Data.Either
 import Data.Text (pack, unpack)
@@ -31,9 +31,10 @@ import Network.HTTP.Simple
 import Options.Applicative hiding (Success)
 import PAB (StarterContracts (..))
 import Perun.Offchain (OpenParams (..))
+import Plutus.PAB.Events.ContractInstanceState (logs)
 import Plutus.PAB.Types (Config (..), WebserverConfig (..), defaultWebServerConfig)
 import Plutus.PAB.Webserver.Client (InstanceClient (..), PabClient (..), pabClient)
-import Plutus.PAB.Webserver.Types (ContractActivationArgs (..))
+import Plutus.PAB.Webserver.Types (ContractActivationArgs (..), ContractInstanceClientState (..))
 import Servant.Client (ClientError (..), mkClientEnv, runClientM)
 import Servant.Client.Core.BaseUrl (BaseUrl (..), Scheme (..), showBaseUrl)
 import System.Exit
@@ -162,7 +163,7 @@ main' (CLA myWallet peerWallet) = do
   print cid
 
   -- Create client allowing to call endpoints on `PerunContract`.
-  let InstanceClient {callInstanceEndpoint} = instanceClient cid
+  let InstanceClient {getInstanceStatus, callInstanceEndpoint} = instanceClient cid
       callStart = callInstanceEndpoint "start"
       -- callFund = callInstanceEndpoint "fund"
       -- callAbort = callInstanceEndpoint "abort"
@@ -191,6 +192,10 @@ main' (CLA myWallet peerWallet) = do
       icht@(InvalidContentTypeHeader _) -> print icht >> exitFailure
       cerr@(ConnectionError _) -> print cerr >> exitFailure
     Right _ -> print "successfully made dummy payment"
+
+  runClientM getInstanceStatus clientEnv >>= \case
+    Left err -> print err >> exitFailure
+    Right ContractInstanceClientState {cicCurrentState} -> mapM_ (print . encode) (logs cicCurrentState)
 
 -- runClientM (callStart . toJSON $ openParams) clientEnv >>= \case
 --   Left ce -> case ce of
