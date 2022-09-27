@@ -23,7 +23,7 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Data
 import qualified Data.Semigroup as Semigroup
 import Data.Text (Text)
-import Ledger
+import Ledger hiding (version)
 import qualified Ledger.Ada as Ada
 import qualified Ledger.Value as Value
 import Perun hiding (ChannelAction (..))

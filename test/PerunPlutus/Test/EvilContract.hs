@@ -251,7 +251,7 @@ forceCloseValidInput cid = do
   let r = Scripts.Redeemer (PlutusTx.toBuiltinData ForceClose)
       lookups =
         Constraints.typedValidatorLookups (typedChannelValidator cid)
-          P.<> Constraints.otherScript (channelValidator cid)
+          P.<> Constraints.plutusV2OtherScript (channelValidator cid)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
         mconcat (zipWith Constraints.mustPayToPubKey (pPaymentPKs channelParameters) (map Ada.lovelaceValueOf (balances state)))
@@ -320,7 +320,7 @@ uncheckedTx d r cid v oref oidx = (lookups, tx)
   where
     lookups =
       Constraints.typedValidatorLookups (typedChannelValidator cid)
-        P.<> Constraints.otherScript (channelValidator cid)
+        P.<> Constraints.plutusV2OtherScript (channelValidator cid)
         P.<> Constraints.unspentOutputs (Map.singleton oref oidx)
     tx =
       Constraints.mustPayToTheScript d v
