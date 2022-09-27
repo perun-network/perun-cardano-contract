@@ -45,11 +45,47 @@ where
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Data
 import GHC.Generics (Generic)
-import Ledger hiding (singleton)
+import Ledger (
+  PaymentPubKey(..),
+  PaymentPubKeyHash(..),
+  Signature,
+  POSIXTime,
+  DiffMilliSeconds(..),
+  fromMilliSeconds,
+  from,
+  strictLowerBound,
+  strictUpperBound,
+  Address,
+  member,
+  contains,
+  toPubKeyHash,
+  Interval(..),
+  Extended(..),
+  LowerBound(..),
+  UpperBound(..),
+  Value(..),
+  scriptHashAddress,
+  txOutDatumHash,
+  minAdaTxOut,
+              )
+import Plutus.V2.Ledger.Contexts (
+  TxOut(..),
+  TxInInfo(..),
+  TxInfo(..),
+  ScriptContext(..),
+  txSignedBy,
+  findDatum,
+  getContinuingOutputs,
+  findDatum,
+                                 )
+import Plutus.V2.Ledger.Tx (
+  OutputDatum(..),
+                           )
 import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
-import Ledger.Scripts
-import qualified Ledger.Typed.Scripts as Scripts
+import Ledger.Scripts hiding (version)
+-- import qualified Ledger.Typed.Scripts as Scripts
+import qualified Plutus.Script.Utils.V2.Typed.Scripts as Scripts
 import Ledger.Value (geq)
 import Playground.Contract (ensureKnownCurrencies, printJson, printSchemas, stage)
 import Plutus.Contract.Oracle (SignedMessage, verifySignedMessageConstraints)
@@ -136,7 +172,7 @@ PlutusTx.makeLift ''ChannelAction
 data ChannelDatum = ChannelDatum
   { channelParameters :: !Channel,
     state :: !ChannelState,
-    time :: !Ledger.POSIXTime,
+    time :: !POSIXTime,
     funding :: ![Integer],
     funded :: !Bool,
     disputed :: !Bool
@@ -301,9 +337,9 @@ mkChannelValidator cID oldDatum action ctx =
 
     input :: TxInInfo
     input =
-      let isScriptInput i = case (txOutDatumHash . txInInfoResolved) i of
-            Nothing -> False
-            Just _ -> True
+      let isScriptInput i = case (txOutDatum . txInInfoResolved) i of
+            NoOutputDatum -> False
+            _ -> True
           xs = [i | i <- txInfoInputs info, isScriptInput i]
        in case xs of
             [i] -> i
@@ -321,16 +357,20 @@ mkChannelValidator cID oldDatum action ctx =
     correctInputFunding :: Bool
     correctInputFunding = inVal == Ada.lovelaceValueOf (sum $ funding oldDatum)
 
+    resolveDatumTarget :: TxOut -> BuiltinData -> (TxOut, ChannelDatum)
+    resolveDatumTarget o d = case PlutusTx.fromBuiltinData d of
+            Just ad' -> (o, ad')
+            Nothing -> traceError "error decoding data"
+
     ownOutput :: TxOut
     outputDatum :: ChannelDatum
     (ownOutput, outputDatum) = case getContinuingOutputs ctx of
-      [o] -> case txOutDatumHash o of
-        Nothing -> traceError "wrong output type"
-        Just h -> case findDatum h info of
+      [o] -> case txOutDatum o of
+        NoOutputDatum -> traceError "wrong output type"
+        OutputDatum (Datum d) -> resolveDatumTarget o d
+        OutputDatumHash h -> case findDatum h info of
           Nothing -> traceError "datum not found"
-          Just (Datum d) -> case PlutusTx.fromBuiltinData d of
-            Just ad' -> (o, ad')
-            Nothing -> traceError "error decoding data"
+          Just (Datum d) -> resolveDatumTarget o d
       _ -> traceError "expected exactly one continuing output"
 
     channelIntegrityAtFunding :: Bool

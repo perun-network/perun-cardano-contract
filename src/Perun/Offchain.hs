@@ -5,6 +5,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -17,15 +18,18 @@
 
 module Perun.Offchain where
 
+import Cardano.Api (serialiseToTextEnvelope)
 import Control.Monad hiding (fmap)
 import Data.Aeson (FromJSON, ToJSON)
 import Data.List (genericSplitAt)
 import Data.Map as Map hiding (drop, map)
 import Data.Text (Text, pack)
+import Data.Void
 import GHC.Generics (Generic)
 import Ledger hiding (singleton)
 import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
+import Ledger.Constraints.OffChain ()
 import Ledger.Scripts
 import Perun.Onchain
 import Plutus.Contract
@@ -133,7 +137,9 @@ dummyPayment :: PaymentPubKeyHash -> Contract w s Text ()
 dummyPayment key = do
   let txConstr =
         Constraints.mustPayToPubKey key (Ada.lovelaceValueOf 10_000_000)
+  logInfo @P.String "making dummy payment..."
   ledgerTx <- submitTx txConstr
+  logInfo @P.String "dummy payment submitted..."
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
 
 --
@@ -192,7 +198,7 @@ fund FundParams {..} = do
 
       lookups =
         Constraints.typedValidatorLookups (typedChannelValidator fpChannelId)
-          P.<> Constraints.otherScript (channelValidator fpChannelId)
+          P.<> Constraints.plutusV2OtherScript (channelValidator fpChannelId)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
         Constraints.mustPayToTheScript newDatum v
@@ -212,7 +218,7 @@ abort (AbortParams cId) = do
   let r = Redeemer (PlutusTx.toBuiltinData Abort)
       lookups =
         Constraints.typedValidatorLookups (typedChannelValidator cId)
-          P.<> Constraints.otherScript (channelValidator cId)
+          P.<> Constraints.plutusV2OtherScript (channelValidator cId)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
         mconcat (zipWith Constraints.mustPayToPubKey (pPaymentPKs channelParameters) (map Ada.lovelaceValueOf funding))
@@ -289,7 +295,7 @@ dispute (DisputeParams keys sst) = do
 
       lookups =
         Constraints.typedValidatorLookups (typedChannelValidator $ channelId dState)
-          P.<> Constraints.otherScript (channelValidator $ channelId dState)
+          P.<> Constraints.plutusV2OtherScript (channelValidator $ channelId dState)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
         Constraints.mustPayToTheScript newDatum v
@@ -315,7 +321,7 @@ close (CloseParams keys sst) = do
   let r = Redeemer . PlutusTx.toBuiltinData $ MkClose sst
       lookups =
         Constraints.typedValidatorLookups (typedChannelValidator channelId)
-          P.<> Constraints.otherScript (channelValidator channelId)
+          P.<> Constraints.plutusV2OtherScript (channelValidator channelId)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
         mconcat (zipWith Constraints.mustPayToPubKey (pPaymentPKs channelParameters) (map Ada.lovelaceValueOf balances))
@@ -339,7 +345,7 @@ forceClose (ForceCloseParams cId) = do
   let r = Redeemer (PlutusTx.toBuiltinData ForceClose)
       lookups =
         Constraints.typedValidatorLookups (typedChannelValidator cId)
-          P.<> Constraints.otherScript (channelValidator cId)
+          P.<> Constraints.plutusV2OtherScript (channelValidator cId)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
         mconcat (zipWith Constraints.mustPayToPubKey (pPaymentPKs channelParameters) (map Ada.lovelaceValueOf (balances state)))
@@ -365,11 +371,11 @@ findChannel cID = do
   utxos <- utxosAt $ scriptHashAddress (channelHash cID)
   case Map.toList utxos of
     -- TODO: revise this!
-    (oref, o) : _ -> case _ciTxOutDatum o of
-      Left _ -> throwError "datum missing"
-      Right (Datum e) -> case PlutusTx.fromBuiltinData e of
+    (oref, o) : _ -> case _ciTxOutScriptDatum o of
+      (_, Just (Datum e)) -> case PlutusTx.fromBuiltinData e of
         Nothing -> throwError "datum has wrong type"
         Just d@ChannelDatum {} -> return (oref, o, d)
+      _         -> throwError "datum missing"
     _ -> throwError "channel utxo not found"
 
 addFunding :: Integer -> Integer -> [Integer] -> [Integer]

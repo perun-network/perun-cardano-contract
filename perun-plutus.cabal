@@ -99,6 +99,7 @@ library
                       , aeson
                       , bytestring
                       , cardano-api
+                      , cardano-wallet
                       , prettyprinter
                       , containers
                       , data-default
@@ -106,6 +107,7 @@ library
                       , plutus-ledger
                       , plutus-ledger-api
                       , plutus-ledger-constraints
+                      , plutus-script-utils
                       , playground-common
                       , plutus-tx
                       , lens
