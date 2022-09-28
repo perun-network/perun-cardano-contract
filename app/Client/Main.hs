@@ -11,11 +11,14 @@ module Main where
 
 import qualified Cardano.Api as Api
 import qualified Cardano.Api.Shelley as Api
-import Cardano.Crypto.Wallet (xpub)
+import Cardano.Crypto.Wallet (XPrv, xpub)
+import Cardano.Mnemonic
 import Cardano.Wallet.Api.Client (AddressClient (..), addressClient)
 import qualified Cardano.Wallet.Api.Link as Link
 import Cardano.Wallet.Api.Types as AT (ApiAccountKey (..), ApiAddress (..), ApiT (..), KeyFormat (..), WalletStyle (..))
 import Cardano.Wallet.Primitive.AddressDerivation (NetworkDiscriminant (..))
+import Cardano.Wallet.Primitive.AddressDerivation.Shelley (generateKeyFromSeed, getKey)
+import Cardano.Wallet.Primitive.Passphrase (Passphrase (..))
 import qualified Cardano.Wallet.Primitive.Types as Types
 import Cardano.Wallet.Primitive.Types.Address (Address (..))
 import Cardano.Wallet.Shelley.Compatibility ()
@@ -23,14 +26,17 @@ import Control.Monad ((>=>))
 import Data.Aeson (Result (..), encode, fromJSON, toJSON)
 import Data.Default
 import Data.Either
-import Data.Text (pack, unpack)
+import Data.Text (Text, pack, unpack)
 import Data.Text.Class (fromText)
-import Ledger (PaymentPubKey (..), PaymentPubKeyHash (..), paymentPubKeyHash, xPubToPublicKey)
+import Ledger (PaymentPrivateKey (..), PaymentPubKey (..), PaymentPubKeyHash (..), PrivateKey, paymentPubKeyHash, xPubToPublicKey)
+import Ledger.Crypto (toPublicKey)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Simple
 import Options.Applicative hiding (Success)
 import PAB (StarterContracts (..))
 import Perun.Offchain (OpenParams (..))
+import Perun.Onchain (ChannelState (..))
+import Plutus.Contract.Oracle (SignedMessage, signMessage')
 import Plutus.PAB.Events.ContractInstanceState (logs)
 import Plutus.PAB.Types (Config (..), WebserverConfig (..), defaultWebServerConfig)
 import Plutus.PAB.Webserver.Client (InstanceClient (..), PabClient (..), pabClient)
@@ -192,3 +198,76 @@ main' (CLA myWallet peerWallet) = do
       icth@(InvalidContentTypeHeader _) -> print icth >> exitFailure
       cerr@(ConnectionError _) -> print cerr >> exitFailure
     Right _ -> print ("successfully requested open for channel with ID: " <> (show . spChannelId $ openParams))
+
+signingKeyAlice :: PaymentPrivateKey
+signingKeyAlice = PaymentPrivateKey getKeyAlice
+
+signingPubKeyAlice :: PaymentPubKey
+signingPubKeyAlice = PaymentPubKey $ toPublicKey getKeyAlice
+
+signingKeyBob :: PaymentPrivateKey
+signingKeyBob = PaymentPrivateKey getKeyBob
+
+signingPubKeyBob :: PaymentPubKey
+signingPubKeyBob = PaymentPubKey $ toPublicKey getKeyBob
+
+signState :: ChannelState -> XPrv -> SignedMessage ChannelState
+signState = signMessage'
+
+getKeyAlice :: XPrv
+getKeyAlice = getKey $ generateKeyFromSeed (getMnemonic alicePhrase) alicePassphrase
+
+alicePassphrase :: Passphrase "encryption"
+alicePassphrase = Passphrase "01233456789"
+
+getKeyBob :: XPrv
+getKeyBob = getKey $ generateKeyFromSeed (getMnemonic bobPhrase) bobPassphrase
+
+getMnemonic :: [Text] -> (SomeMnemonic, Maybe SomeMnemonic)
+getMnemonic phrase =
+  let mn =
+        mkSomeMnemonic @'[15] phrase
+   in case mn of
+        Right b -> (b, Nothing)
+        _ -> error "whatever"
+
+alicePhrase :: [Text]
+alicePhrase =
+  [ "lottery",
+    "ring",
+    "detect",
+    "drip",
+    "black",
+    "match",
+    "spoon",
+    "post",
+    "bind",
+    "suit",
+    "gather",
+    "someone",
+    "notice",
+    "hero",
+    "scrap"
+  ]
+
+bobPhrase :: [Text]
+bobPhrase =
+  [ "drill",
+    "piece",
+    "rotate",
+    "badge",
+    "rapid",
+    "foam",
+    "ginger",
+    "panda",
+    "velvet",
+    "version",
+    "duck",
+    "travel",
+    "script",
+    "police",
+    "enemy"
+  ]
+
+bobPassphrase :: Passphrase "encryption"
+bobPassphrase = Passphrase "01233456789"

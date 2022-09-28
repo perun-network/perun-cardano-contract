@@ -375,7 +375,7 @@ findChannel cID = do
       (_, Just (Datum e)) -> case PlutusTx.fromBuiltinData e of
         Nothing -> throwError "datum has wrong type"
         Just d@ChannelDatum {} -> return (oref, o, d)
-      _         -> throwError "datum missing"
+      _ -> throwError "datum missing"
     _ -> throwError "channel utxo not found"
 
 addFunding :: Integer -> Integer -> [Integer] -> [Integer]

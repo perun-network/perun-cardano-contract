@@ -63,6 +63,7 @@ executable perun-client
                     , cardano-wallet-core
                     , cardano-wallet
                     , cardano-api
+                    , cardano-addresses
                     , text
                     , text-class
                     , http-conduit
