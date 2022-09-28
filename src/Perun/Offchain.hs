@@ -311,13 +311,22 @@ dispute (DisputeParams keys sst) = do
 
 close :: CloseParams -> Contract w s Text ()
 close (CloseParams keys sst) = do
+  logInfo @P.String $ printf "10"
+
   let s@ChannelState {..} = extractVerifiedState sst keys
+  logInfo @P.String $ printf "11"
   (oref, o, d@ChannelDatum {..}) <- findChannel channelId
+  logInfo @P.String $ printf "TEST"
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   unless (all isLegalOutValue balances) . throwError . pack $ printf "Unable to close channel with any balance below minimum Ada"
+  logInfo @P.String $ printf "1"
+
   unless (isValidStateTransition state s) . throwError . pack $ printf "state transition invalid"
+  logInfo @P.String $ printf "2"
   unless final . throwError . pack $ printf "can not close unless state is final"
+  logInfo @P.String $ printf "3"
   unless funded . throwError . pack $ printf "can only close funded state"
+  logInfo @P.String $ printf "4"
   let r = Redeemer . PlutusTx.toBuiltinData $ MkClose sst
       lookups =
         Constraints.typedValidatorLookups (typedChannelValidator channelId)
@@ -326,7 +335,9 @@ close (CloseParams keys sst) = do
       tx =
         mconcat (zipWith Constraints.mustPayToPubKey (pPaymentPKs channelParameters) (map Ada.lovelaceValueOf balances))
           <> Constraints.mustSpendScriptOutput oref r
+  logInfo @P.String $ printf "5"
   ledgerTx <- submitTxConstraintsWith lookups tx
+  logInfo @P.String $ printf "6"
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $
     printf
@@ -368,7 +379,9 @@ findChannel ::
   ChannelID ->
   Contract w s Text (TxOutRef, ChainIndexTxOut, ChannelDatum)
 findChannel cID = do
+  logInfo @P.String $ printf "12"
   utxos <- utxosAt $ scriptHashAddress (channelHash cID)
+  throwError "13"
   case Map.toList utxos of
     -- TODO: revise this!
     (oref, o) : _ -> case _ciTxOutScriptDatum o of

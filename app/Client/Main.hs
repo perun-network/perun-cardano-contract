@@ -22,6 +22,7 @@ import Cardano.Wallet.Primitive.Passphrase (Passphrase (..))
 import qualified Cardano.Wallet.Primitive.Types as Types
 import Cardano.Wallet.Primitive.Types.Address (Address (..))
 import Cardano.Wallet.Shelley.Compatibility ()
+import Control.Concurrent (threadDelay)
 import Control.Monad ((>=>))
 import Data.Aeson (Result (..), encode, fromJSON, toJSON)
 import Data.Default
@@ -30,13 +31,15 @@ import Data.Text (Text, pack, unpack)
 import Data.Text.Class (fromText)
 import Ledger (PaymentPrivateKey (..), PaymentPubKey (..), PaymentPubKeyHash (..), PrivateKey, paymentPubKeyHash, xPubToPublicKey)
 import Ledger.Crypto (toPublicKey)
+import qualified Ledger.Crypto as Crypto
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Simple
 import Options.Applicative hiding (Success)
 import PAB (StarterContracts (..))
+import Perun (CloseParams (..), SignedState (..))
 import Perun.Offchain (OpenParams (..))
 import Perun.Onchain (ChannelState (..))
-import Plutus.Contract.Oracle (SignedMessage, signMessage')
+import Plutus.Contract.Oracle (SignedMessage, signMessage, signMessage')
 import Plutus.PAB.Events.ContractInstanceState (logs)
 import Plutus.PAB.Types (Config (..), WebserverConfig (..), defaultWebServerConfig)
 import Plutus.PAB.Webserver.Client (InstanceClient (..), PabClient (..), pabClient)
@@ -175,7 +178,7 @@ main' (CLA myWallet peerWallet) = do
       -- callAbort = callInstanceEndpoint "abort"
       callOpen = callInstanceEndpoint "open"
       -- callDispute = callInstanceEndpoint "dispute"
-      -- callClose = callInstanceEndpoint "close"
+      callClose = callInstanceEndpoint "close"
       -- callForceClose = callInstanceEndpoint "forceClose"
       callDummy = callInstanceEndpoint "dummy"
       callDummyPayment = callInstanceEndpoint "dummyPayment"
@@ -184,20 +187,43 @@ main' (CLA myWallet peerWallet) = do
       openParams =
         OpenParams
           { spChannelId = 42069, -- TODO: Hardcoded...
-            spSigningPKs = paymentPubKeys,
+            spSigningPKs = [signingPubKeyAlice, signingPubKeyBob],
             spPaymentPKs = pubKeyHashes,
             spBalances = [defaultBalance, defaultBalance],
             spTimeLock = defaultTimeLock
           }
 
-  runClientM (callOpen . toJSON $ openParams) clientEnv >>= \case
+  --  runClientM (callOpen . toJSON $ openParams) clientEnv >>= \case
+  --    Left ce -> case ce of
+  --      f@(FailureResponse _ _) -> print f >> exitFailure
+  --      d@(DecodeFailure _ _) -> print d >> exitFailure
+  --      uct@(UnsupportedContentType _ _) -> print uct >> exitFailure
+  --      icth@(InvalidContentTypeHeader _) -> print icth >> exitFailure
+  --      cerr@(ConnectionError _) -> print cerr >> exitFailure
+  --    Right _ -> print ("successfully requested open for channel with ID: " <> (show . spChannelId $ openParams))
+
+  --threadDelay 10_000_000sdf
+
+
+
+  let newState = ChannelState 42069 [defaultBalance `div` 2, (defaultBalance `div` 2) * 3] 1 True
+      signedState = update newState
+      closeParams = CloseParams [signingPubKeyAlice, signingPubKeyBob] signedState
+
+  runClientM (callClose . toJSON $ closeParams) clientEnv >>= \case
     Left ce -> case ce of
       f@(FailureResponse _ _) -> print f >> exitFailure
       d@(DecodeFailure _ _) -> print d >> exitFailure
       uct@(UnsupportedContentType _ _) -> print uct >> exitFailure
       icth@(InvalidContentTypeHeader _) -> print icth >> exitFailure
       cerr@(ConnectionError _) -> print cerr >> exitFailure
-    Right _ -> print ("successfully requested open for channel with ID: " <> (show . spChannelId $ openParams))
+    Right _ -> print ("successfully requested close for channel with ID: " <> (show . spChannelId $ openParams))
+
+FIX THIS PLS:
+
+
+update :: ChannelState -> SignedState
+update newState = SignedState [signMessage newState signingKeyAlice alicePassphrase', signMessage newState signingKeyBob bobPassphrase']
 
 signingKeyAlice :: PaymentPrivateKey
 signingKeyAlice = PaymentPrivateKey getKeyAlice
@@ -210,9 +236,6 @@ signingKeyBob = PaymentPrivateKey getKeyBob
 
 signingPubKeyBob :: PaymentPubKey
 signingPubKeyBob = PaymentPubKey $ toPublicKey getKeyBob
-
-signState :: ChannelState -> XPrv -> SignedMessage ChannelState
-signState = signMessage'
 
 getKeyAlice :: XPrv
 getKeyAlice = getKey $ generateKeyFromSeed (getMnemonic alicePhrase) alicePassphrase
@@ -271,3 +294,9 @@ bobPhrase =
 
 bobPassphrase :: Passphrase "encryption"
 bobPassphrase = Passphrase "01233456789"
+
+alicePassphrase' :: Crypto.Passphrase
+alicePassphrase' = Crypto.Passphrase "0123456789"
+
+bobPassphrase' :: Crypto.Passphrase
+bobPassphrase' = Crypto.Passphrase "0123456789"

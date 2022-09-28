@@ -45,50 +45,50 @@ where
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Data
 import GHC.Generics (Generic)
-import Ledger (
-  PaymentPubKey(..),
-  PaymentPubKeyHash(..),
-  Signature,
-  POSIXTime,
-  DiffMilliSeconds(..),
-  fromMilliSeconds,
-  from,
-  strictLowerBound,
-  strictUpperBound,
-  Address,
-  member,
-  contains,
-  toPubKeyHash,
-  Interval(..),
-  Extended(..),
-  LowerBound(..),
-  UpperBound(..),
-  Value(..),
-  scriptHashAddress,
-  txOutDatumHash,
-  minAdaTxOut,
-              )
-import Plutus.V2.Ledger.Contexts (
-  TxOut(..),
-  TxInInfo(..),
-  TxInfo(..),
-  ScriptContext(..),
-  txSignedBy,
-  findDatum,
-  getContinuingOutputs,
-  findDatum,
-                                 )
-import Plutus.V2.Ledger.Tx (
-  OutputDatum(..),
-                           )
+import Ledger
+  ( Address,
+    DiffMilliSeconds (..),
+    Extended (..),
+    Interval (..),
+    LowerBound (..),
+    POSIXTime,
+    PaymentPubKey (..),
+    PaymentPubKeyHash (..),
+    Signature,
+    UpperBound (..),
+    Value (..),
+    contains,
+    from,
+    fromMilliSeconds,
+    member,
+    minAdaTxOut,
+    scriptHashAddress,
+    strictLowerBound,
+    strictUpperBound,
+    toPubKeyHash,
+    txOutDatumHash,
+  )
 import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
 import Ledger.Scripts hiding (version)
 -- import qualified Ledger.Typed.Scripts as Scripts
-import qualified Plutus.Script.Utils.V2.Typed.Scripts as Scripts
+
 import Ledger.Value (geq)
 import Playground.Contract (ensureKnownCurrencies, printJson, printSchemas, stage)
 import Plutus.Contract.Oracle (SignedMessage, verifySignedMessageConstraints)
+import qualified Plutus.Script.Utils.V2.Typed.Scripts as Scripts
+import Plutus.V2.Ledger.Contexts
+  ( ScriptContext (..),
+    TxInInfo (..),
+    TxInfo (..),
+    TxOut (..),
+    findDatum,
+    getContinuingOutputs,
+    txSignedBy,
+  )
+import Plutus.V2.Ledger.Tx
+  ( OutputDatum (..),
+  )
 import qualified PlutusTx
 import PlutusTx.Prelude hiding (unless)
 import Schema (FormSchema (..), ToSchema (..))
@@ -359,8 +359,8 @@ mkChannelValidator cID oldDatum action ctx =
 
     resolveDatumTarget :: TxOut -> BuiltinData -> (TxOut, ChannelDatum)
     resolveDatumTarget o d = case PlutusTx.fromBuiltinData d of
-            Just ad' -> (o, ad')
-            Nothing -> traceError "error decoding data"
+      Just ad' -> (o, ad')
+      Nothing -> traceError "error decoding data"
 
     ownOutput :: TxOut
     outputDatum :: ChannelDatum
@@ -444,7 +444,7 @@ mkChannelValidator cID oldDatum action ctx =
 
 typedChannelValidator :: ChannelID -> Scripts.TypedValidator ChannelTypes
 typedChannelValidator cID =
-  Scripts.mkTypedValidator @ChannelTypes
+  Scripts.mkTypedValidatorParam @ChannelTypes
     ($$(PlutusTx.compile [||mkChannelValidator||]) `PlutusTx.applyCode` PlutusTx.liftCode cID)
     $$(PlutusTx.compile [||wrap||])
   where
