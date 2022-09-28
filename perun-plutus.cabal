@@ -137,6 +137,7 @@ test-suite perun-plutus-test
                     , tasty-golden -any
                     , tasty-quickcheck -any
                     , hspec-expectations-pretty-diff
+                    , cardano-crypto
                     , perun-plutus
                     , plutus-contract
                     , aeson

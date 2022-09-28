@@ -31,6 +31,7 @@ import PerunPlutus.Test.EvilContract
 import Plutus.Contract.Oracle
 import qualified Plutus.Contract.Request as Trace
 import Plutus.Contract.Test (Wallet, mockWalletPaymentPubKey, mockWalletPaymentPubKeyHash, w1, w2, w3, w4)
+import qualified Cardano.Crypto.Wallet as Crypto
 import Plutus.Contract.Test.ContractModel
 import qualified Plutus.Contract.Types as ET
 import qualified Plutus.Trace.Effects.Assert as TA (assert)
@@ -317,9 +318,9 @@ instance ContractModel PerunModel where
         PerunModel Nothing -> Trace.throwError . Trace.GenericError $ "no channel to close"
         PerunModel (Just (chan, _, _, _)) -> return chan
       (ss, pks, _) <- verifiedSignedStateAndKeys parties chan
-      requireInvalidTxEndpoint @"dispute" (handle $ Adversary w) (EvilDispute cid pks (map paymentPubKeyHash pks) bals ss c) "maliciious dispute should not work"
+      requireInvalidTxEndpoint @"dispute" (handle $ Adversary w) (EvilDispute cid pks (map paymentPubKeyHash pks) bals ss c) "malicious dispute should not work"
 
-verifiedSignedStateAndKeys :: [Wallet] -> ChannelState -> SpecificationEmulatorTrace (SignedState, [PaymentPubKey], [PrivateKey])
+verifiedSignedStateAndKeys :: [Wallet] -> ChannelState -> SpecificationEmulatorTrace (SignedState, [PaymentPubKey], [Crypto.XPrv])
 verifiedSignedStateAndKeys parties chan = do
   wss <- mapM Trace.agentState parties
   let sks = map (unPaymentPrivateKey . Trace.ownPaymentPrivateKey) wss
