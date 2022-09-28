@@ -39,6 +39,8 @@ package plutus-script-utils
   haddock-options: "--optghc=-fplugin-opt PlutusTx.Plugin:defer-errors"
 package plutus-contract
   haddock-options: "--optghc=-fplugin-opt PlutusTx.Plugin:defer-errors"
+package perun-plutus
+  haddock-options: "--optghc=-fplugin-opt PlutusTx.Plugin:defer-errors"
 
 -- These packages appear in our dependency tree and are very slow to build.
 -- Empirically, turning off optimization shaves off ~50% build time.
