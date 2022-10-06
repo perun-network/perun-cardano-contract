@@ -27,13 +27,14 @@ import Control.Monad ((>=>))
 import Data.Aeson (Result (..), encode, fromJSON, toJSON)
 import Data.Default
 import Data.Either
+import Data.Proxy
 import Data.Text (Text, pack, unpack)
 import Data.Text.Class (fromText)
 import Ledger (PaymentPrivateKey (..), PaymentPubKey (..), PaymentPubKeyHash (..), PrivateKey, paymentPubKeyHash, xPubToPublicKey)
 import Ledger.Crypto (toPublicKey)
 import qualified Ledger.Crypto as Crypto
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Simple
+import Network.HTTP.Simple hiding (Proxy)
 import Options.Applicative hiding (Success)
 import PAB (StarterContracts (..))
 import Perun (CloseParams (..), SignedState (..))
@@ -44,6 +45,7 @@ import Plutus.PAB.Events.ContractInstanceState (logs)
 import Plutus.PAB.Types (Config (..), WebserverConfig (..), defaultWebServerConfig)
 import Plutus.PAB.Webserver.Client (InstanceClient (..), PabClient (..), pabClient)
 import Plutus.PAB.Webserver.Types (ContractActivationArgs (..), ContractInstanceClientState (..))
+import Schema
 import Servant.Client (ClientError (..), mkClientEnv, runClientM)
 import Servant.Client.Core.BaseUrl (BaseUrl (..), Scheme (..), showBaseUrl)
 import System.Exit
@@ -193,22 +195,21 @@ main' (CLA myWallet peerWallet) = do
             spTimeLock = defaultTimeLock
           }
 
-  --  runClientM (callOpen . toJSON $ openParams) clientEnv >>= \case
-  --    Left ce -> case ce of
-  --      f@(FailureResponse _ _) -> print f >> exitFailure
-  --      d@(DecodeFailure _ _) -> print d >> exitFailure
-  --      uct@(UnsupportedContentType _ _) -> print uct >> exitFailure
-  --      icth@(InvalidContentTypeHeader _) -> print icth >> exitFailure
-  --      cerr@(ConnectionError _) -> print cerr >> exitFailure
-  --    Right _ -> print ("successfully requested open for channel with ID: " <> (show . spChannelId $ openParams))
-
-  --threadDelay 10_000_000sdf
-
-
+  --runClientM (callOpen . toJSON $ openParams) clientEnv >>= \case
+  --  Left ce -> case ce of
+  --    f@(FailureResponse _ _) -> print f >> exitFailure
+  --    d@(DecodeFailure _ _) -> print d >> exitFailure
+  --    uct@(UnsupportedContentType _ _) -> print uct >> exitFailure
+  --    icth@(InvalidContentTypeHeader _) -> print icth >> exitFailure
+  --    cerr@(ConnectionError _) -> print cerr >> exitFailure
+  --  Right _ -> print ("successfully requested open for channel with ID: " <> (show . spChannelId $ openParams))
+  --
+  --threadDelay 10_000_000
 
   let newState = ChannelState 42069 [defaultBalance `div` 2, (defaultBalance `div` 2) * 3] 1 True
       signedState = update newState
       closeParams = CloseParams [signingPubKeyAlice, signingPubKeyBob] signedState
+  --print (toSchema @SignedState)
 
   runClientM (callClose . toJSON $ closeParams) clientEnv >>= \case
     Left ce -> case ce of
@@ -219,8 +220,7 @@ main' (CLA myWallet peerWallet) = do
       cerr@(ConnectionError _) -> print cerr >> exitFailure
     Right _ -> print ("successfully requested close for channel with ID: " <> (show . spChannelId $ openParams))
 
-FIX THIS PLS:
-
+--FIX THIS PLS:
 
 update :: ChannelState -> SignedState
 update newState = SignedState [signMessage newState signingKeyAlice alicePassphrase', signMessage newState signingKeyBob bobPassphrase']

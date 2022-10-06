@@ -72,11 +72,13 @@ import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
 import Ledger.Scripts hiding (version)
 -- import qualified Ledger.Typed.Scripts as Scripts
-
+import Ledger.Scripts.Orphans ()
 import Ledger.Value (geq)
 import Playground.Contract (ensureKnownCurrencies, printJson, printSchemas, stage)
 import Plutus.Contract.Oracle (SignedMessage, verifySignedMessageConstraints)
-import qualified Plutus.Script.Utils.V2.Typed.Scripts as Scripts
+import Plutus.Script.Utils.V2.Address (mkValidatorAddress)
+import qualified Plutus.Script.Utils.V2.Scripts as Scripts
+import qualified Plutus.Script.Utils.V2.Typed.Scripts as Scripts hiding (validatorHash)
 import Plutus.V2.Ledger.Contexts
   ( ScriptContext (..),
     TxInInfo (..),
@@ -155,6 +157,15 @@ instance Eq SignedState where
   {-# INLINEABLE (==) #-}
   a == b = stateSigs a == stateSigs b
 
+-- TODO: investigate why the DatumHash Schema does not work:
+-- FormSchemaArray
+--   (FormSchemaTuple
+--     (FormSchemaObject [("getSignature",FormSchemaString)])
+--     (FormSchemaTuple
+--       (FormSchemaUnsupported "Unsupported, non-record constructor.")
+--       (FormSchemaObject [("channelId",FormSchemaInteger),("balances",FormSchemaArray FormSchemaInteger),("version",FormSchemaInteger),("final",FormSchemaBool)])
+--     )
+--   )
 instance ToSchema SignedState where
   toSchema = FormSchemaArray (toSchema @(Signature, (DatumHash, ChannelState)))
 
@@ -443,9 +454,9 @@ mkChannelValidator cID oldDatum action ctx =
 --
 
 typedChannelValidator :: ChannelID -> Scripts.TypedValidator ChannelTypes
-typedChannelValidator cID =
-  Scripts.mkTypedValidatorParam @ChannelTypes
-    ($$(PlutusTx.compile [||mkChannelValidator||]) `PlutusTx.applyCode` PlutusTx.liftCode cID)
+typedChannelValidator =
+  Scripts.mkTypedValidatorParam @ChannelTypes @ChannelID
+    $$(PlutusTx.compile [||mkChannelValidator||])
     $$(PlutusTx.compile [||wrap||])
   where
     wrap = Scripts.mkUntypedValidator @ChannelDatum @ChannelAction
@@ -454,7 +465,7 @@ channelValidator :: ChannelID -> Validator
 channelValidator = Scripts.validatorScript . typedChannelValidator
 
 channelHash :: ChannelID -> ValidatorHash
-channelHash = Scripts.validatorHash . typedChannelValidator
+channelHash = Scripts.validatorHash . channelValidator
 
-channelAddress :: ChannelID -> Ledger.Address
-channelAddress = scriptHashAddress . channelHash
+channelAddress :: ChannelID -> Address
+channelAddress = mkValidatorAddress . channelValidator

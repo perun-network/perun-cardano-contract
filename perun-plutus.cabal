@@ -67,6 +67,7 @@ executable perun-client
                     , text
                     , text-class
                     , http-conduit
+                    , playground-common
   main-is:          Main.hs
 
 executable perun-pab
