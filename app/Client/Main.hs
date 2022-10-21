@@ -17,20 +17,20 @@ import Cardano.Wallet.Api.Client (AddressClient (..), addressClient)
 import qualified Cardano.Wallet.Api.Link as Link
 import Cardano.Wallet.Api.Types as AT (ApiAccountKey (..), ApiAddress (..), ApiT (..), KeyFormat (..), WalletStyle (..))
 import Cardano.Wallet.Primitive.AddressDerivation (NetworkDiscriminant (..))
-import Cardano.Wallet.Primitive.AddressDerivation.Shelley (generateKeyFromSeed, getKey)
 import Cardano.Wallet.Primitive.Passphrase (Passphrase (..))
 import qualified Cardano.Wallet.Primitive.Types as Types
 import Cardano.Wallet.Primitive.Types.Address (Address (..))
 import Cardano.Wallet.Shelley.Compatibility ()
 import Control.Concurrent (threadDelay)
 import Control.Monad ((>=>))
-import Data.Aeson (Result (..), encode, fromJSON, toJSON)
+import Data.Aeson (Result (..), fromJSON, toJSON)
+import Data.ByteString (concat)
 import Data.Default
 import Data.Either
-import Data.Proxy
 import Data.Text (Text, pack, unpack)
 import Data.Text.Class (fromText)
-import Ledger (PaymentPrivateKey (..), PaymentPubKey (..), PaymentPubKeyHash (..), PrivateKey, paymentPubKeyHash, xPubToPublicKey)
+import Data.Text.Encoding (encodeUtf8)
+import Ledger (PaymentPrivateKey (..), PaymentPubKey (..), PaymentPubKeyHash (..), xPubToPublicKey)
 import Ledger.Crypto (toPublicKey)
 import qualified Ledger.Crypto as Crypto
 import Network.HTTP.Client (defaultManagerSettings, newManager)
@@ -40,16 +40,15 @@ import PAB (StarterContracts (..))
 import Perun (CloseParams (..), SignedState (..))
 import Perun.Offchain (OpenParams (..))
 import Perun.Onchain (ChannelState (..))
-import Plutus.Contract.Oracle (SignedMessage, signMessage, signMessage')
-import Plutus.PAB.Events.ContractInstanceState (logs)
+import Plutus.Contract.Oracle (signMessage)
 import Plutus.PAB.Types (Config (..), WebserverConfig (..), defaultWebServerConfig)
 import Plutus.PAB.Webserver.Client (InstanceClient (..), PabClient (..), pabClient)
-import Plutus.PAB.Webserver.Types (ContractActivationArgs (..), ContractInstanceClientState (..))
-import Schema
+import Plutus.PAB.Webserver.Types (ContractActivationArgs (..))
 import Servant.Client (ClientError (..), mkClientEnv, runClientM)
 import Servant.Client.Core.BaseUrl (BaseUrl (..), Scheme (..), showBaseUrl)
 import System.Exit
 import Wallet.Emulator.Wallet (Wallet (..), WalletId (..))
+import Prelude hiding (concat)
 
 data CmdLineArgs = CLA
   { myWallet :: Wallet,
@@ -84,7 +83,7 @@ defaultPabConfig :: Config
 defaultPabConfig = def
 
 defaultBalance :: Integer
-defaultBalance = 100_000_000
+defaultBalance = 20_000_000
 
 main :: IO ()
 main = execParser opts >>= main'
@@ -109,8 +108,6 @@ main' (CLA myWallet peerWallet) = do
       walletEnv = mkClientEnv mgr walletUrl
       clientEnv = mkClientEnv mgr apiUrl
 
-  print myWallet
-  print peerWallet
   -- Get addresses for wallets.
   let AddressClient {listAddresses} = addressClient
       myCl = listAddresses (ApiT (walletId myWallet)) Nothing
@@ -195,21 +192,20 @@ main' (CLA myWallet peerWallet) = do
             spTimeLock = defaultTimeLock
           }
 
-  --runClientM (callOpen . toJSON $ openParams) clientEnv >>= \case
-  --  Left ce -> case ce of
-  --    f@(FailureResponse _ _) -> print f >> exitFailure
-  --    d@(DecodeFailure _ _) -> print d >> exitFailure
-  --    uct@(UnsupportedContentType _ _) -> print uct >> exitFailure
-  --    icth@(InvalidContentTypeHeader _) -> print icth >> exitFailure
-  --    cerr@(ConnectionError _) -> print cerr >> exitFailure
-  --  Right _ -> print ("successfully requested open for channel with ID: " <> (show . spChannelId $ openParams))
-  --
-  --threadDelay 10_000_000
+  runClientM (callOpen . toJSON $ openParams) clientEnv >>= \case
+    Left ce -> case ce of
+      f@(FailureResponse _ _) -> print f >> exitFailure
+      d@(DecodeFailure _ _) -> print d >> exitFailure
+      uct@(UnsupportedContentType _ _) -> print uct >> exitFailure
+      icth@(InvalidContentTypeHeader _) -> print icth >> exitFailure
+      cerr@(ConnectionError _) -> print cerr >> exitFailure
+    Right _ -> print ("successfully requested open for channel with ID: " <> (show . spChannelId $ openParams))
+
+  threadDelay 10_000_000
 
   let newState = ChannelState 42069 [defaultBalance `div` 2, (defaultBalance `div` 2) * 3] 1 True
       signedState = update newState
       closeParams = CloseParams [signingPubKeyAlice, signingPubKeyBob] signedState
-  --print (toSchema @SignedState)
 
   runClientM (callClose . toJSON $ closeParams) clientEnv >>= \case
     Left ce -> case ce of
@@ -220,31 +216,33 @@ main' (CLA myWallet peerWallet) = do
       cerr@(ConnectionError _) -> print cerr >> exitFailure
     Right _ -> print ("successfully requested close for channel with ID: " <> (show . spChannelId $ openParams))
 
---FIX THIS PLS:
-
 update :: ChannelState -> SignedState
-update newState = SignedState [signMessage newState signingKeyAlice alicePassphrase', signMessage newState signingKeyBob bobPassphrase']
+update newState =
+  SignedState
+    [ signMessage newState signingKeyAlice alicePassphrase',
+      signMessage newState signingKeyBob bobPassphrase'
+    ]
 
 signingKeyAlice :: PaymentPrivateKey
 signingKeyAlice = PaymentPrivateKey getKeyAlice
 
 signingPubKeyAlice :: PaymentPubKey
-signingPubKeyAlice = PaymentPubKey $ toPublicKey getKeyAlice
+signingPubKeyAlice = PaymentPubKey . toPublicKey $ getKeyAlice
 
 signingKeyBob :: PaymentPrivateKey
 signingKeyBob = PaymentPrivateKey getKeyBob
 
 signingPubKeyBob :: PaymentPubKey
-signingPubKeyBob = PaymentPubKey $ toPublicKey getKeyBob
+signingPubKeyBob = PaymentPubKey . toPublicKey $ getKeyBob
 
 getKeyAlice :: XPrv
-getKeyAlice = getKey $ generateKeyFromSeed (getMnemonic alicePhrase) alicePassphrase
+getKeyAlice = Crypto.generateFromSeed (concat $ map encodeUtf8 alicePhrase) alicePassphrase'
 
 alicePassphrase :: Passphrase "encryption"
 alicePassphrase = Passphrase "01233456789"
 
 getKeyBob :: XPrv
-getKeyBob = getKey $ generateKeyFromSeed (getMnemonic bobPhrase) bobPassphrase
+getKeyBob = Crypto.generateFromSeed (concat $ map encodeUtf8 bobPhrase) bobPassphrase'
 
 getMnemonic :: [Text] -> (SomeMnemonic, Maybe SomeMnemonic)
 getMnemonic phrase =

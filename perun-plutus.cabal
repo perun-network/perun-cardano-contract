@@ -51,6 +51,7 @@ executable perun-client
                     , aeson
                     , freer-simple
                     , prettyprinter
+                    , bytestring
                     , freer-extras
                     , plutus-ledger
                     , data-default
