@@ -37,7 +37,7 @@ import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Simple hiding (Proxy)
 import Options.Applicative hiding (Success)
 import PAB (StarterContracts (..))
-import Perun (CloseParams (..), SignedState (..))
+import Perun (CloseParams (..), DisputeParams (..), ForceCloseParams (..), FundParams (..), SignedState (..))
 import Perun.Offchain (OpenParams (..))
 import Perun.Onchain (ChannelState (..))
 import Plutus.Contract.Oracle (signMessage)
@@ -60,15 +60,15 @@ cmdLineParser =
   CLA
     <$> parseWallet
       ( long "walletid"
-          <> short 'w'
+          <> short 'a'
           <> help
-            "Wallet identifier from local cardano-wallet"
+            "Alice's wallet identifier"
       )
     <*> parseWallet
       ( long "walletid-peer"
-          <> short 'p'
+          <> short 'b'
           <> help
-            "Wallet identifier of peer"
+            "Bob's wallet identifier"
       )
   where
     parseWallet :: Mod OptionFields String -> Parser Wallet
@@ -77,7 +77,7 @@ cmdLineParser =
     right _ = error "parsing failed"
 
 defaultTimeLock :: Integer
-defaultTimeLock = 15 * 1000
+defaultTimeLock = 90 * 1000
 
 defaultPabConfig :: Config
 defaultPabConfig = def
@@ -100,7 +100,7 @@ addressFromApi :: ApiAddress n -> Address
 addressFromApi = getApiT . fst . AT.id
 
 main' :: forall n. (n ~ 'Testnet 42) => CmdLineArgs -> IO ()
-main' (CLA myWallet peerWallet) = do
+main' (CLA aliceWallet bobWallet) = do
   -- Get parameters to establish connection.
   mgr <- newManager defaultManagerSettings
   let apiUrl = Plutus.PAB.Types.baseUrl defaultWebServerConfig
@@ -110,8 +110,8 @@ main' (CLA myWallet peerWallet) = do
 
   -- Get addresses for wallets.
   let AddressClient {listAddresses} = addressClient
-      myCl = listAddresses (ApiT (walletId myWallet)) Nothing
-      pCl = listAddresses (ApiT (walletId peerWallet)) Nothing
+      aliceCl = listAddresses (ApiT (walletId aliceWallet)) Nothing
+      bobCl = listAddresses (ApiT (walletId bobWallet)) Nothing
   resultAddresses <-
     mapM
       ( \i ->
@@ -120,7 +120,7 @@ main' (CLA myWallet peerWallet) = do
             Right (v : _) -> return . fromJSON @(ApiAddress n) $ v
             Right _ -> print @String "No addresses associated with given wallet" >> exitFailure
       )
-      [myCl, pCl]
+      [aliceCl, bobCl]
   addresses <-
     mapM
       ( \case
@@ -138,8 +138,8 @@ main' (CLA myWallet peerWallet) = do
       )
       addresses
 
-  let (_, endpointUrlA) = Link.getAccountKey @'Shelley (ApiT (walletId myWallet)) (Just Extended)
-      (_, endpointUrlB) = Link.getAccountKey @'Shelley (ApiT (walletId peerWallet)) (Just Extended)
+  let (_, endpointUrlA) = Link.getAccountKey @'Shelley (ApiT (walletId aliceWallet)) (Just Extended)
+      (_, endpointUrlB) = Link.getAccountKey @'Shelley (ApiT (walletId bobWallet)) (Just Extended)
   eitherPubKeys <-
     mapM
       ( parseRequest . unpack . ((pack (showBaseUrl walletUrl) <> "/") <>) >=> httpJSON @IO @ApiAccountKey
@@ -151,39 +151,63 @@ main' (CLA myWallet peerWallet) = do
       [endpointUrlA, endpointUrlB]
   let paymentPubKeys = map (PaymentPubKey . xPubToPublicKey) (rights eitherPubKeys)
 
-  -- Activate contract.
-  let ca =
+  -- Activate contracts.
+  let caAlice =
         ContractActivationArgs
           { caID = PerunContract,
-            caWallet = Just myWallet
+            caWallet = Just aliceWallet
           }
       PabClient
         { activateContract,
           instanceClient
         } = pabClient @StarterContracts @Integer
 
-  cid <-
-    runClientM (activateContract ca) clientEnv >>= \case
+  let caBob =
+        ContractActivationArgs
+          { caID = PerunContract,
+            caWallet = Just bobWallet
+          }
+      PabClient
+        { activateContract,
+          instanceClient
+        } = pabClient @StarterContracts @Integer
+
+  cidAlice <-
+    runClientM (activateContract caAlice) clientEnv >>= \case
       Left err -> print err >> exitFailure
       Right cid -> return cid
 
-  print @String "started contract instance:"
-  print cid
+  cidBob <-
+    runClientM (activateContract caBob) clientEnv >>= \case
+      Left err -> print err >> exitFailure
+      Right cid -> return cid
+
+  print @String "started contract instances:"
+  print cidAlice
+  print cidBob
 
   -- Create client allowing to call endpoints on `PerunContract`.
-  let InstanceClient {getInstanceStatus, callInstanceEndpoint} = instanceClient cid
-      callStart = callInstanceEndpoint "start"
-      -- callFund = callInstanceEndpoint "fund"
-      -- callAbort = callInstanceEndpoint "abort"
-      callOpen = callInstanceEndpoint "open"
-      -- callDispute = callInstanceEndpoint "dispute"
-      callClose = callInstanceEndpoint "close"
-      -- callForceClose = callInstanceEndpoint "forceClose"
-      callDummy = callInstanceEndpoint "dummy"
-      callDummyPayment = callInstanceEndpoint "dummyPayment"
+  let aliceInstanceClient = instanceClient cidAlice
+      bobInstanceClient = instanceClient cidBob
+      callStartAlice = callInstanceEndpoint aliceInstanceClient "start"
+      callStartBob = callInstanceEndpoint bobInstanceClient "start"
+      callFundAlice = callInstanceEndpoint aliceInstanceClient "fund"
+      callFundBob = callInstanceEndpoint bobInstanceClient "fund"
+      callAbortAlice = callInstanceEndpoint aliceInstanceClient "abort"
+      callAbortBob = callInstanceEndpoint bobInstanceClient "abort"
+      callOpenAlice = callInstanceEndpoint aliceInstanceClient "open"
+      callOpenBob = callInstanceEndpoint bobInstanceClient "open"
+      callDisputeAlice = callInstanceEndpoint aliceInstanceClient "dispute"
+      callDisputeBob = callInstanceEndpoint bobInstanceClient "dispute"
+      callCloseAlice = callInstanceEndpoint aliceInstanceClient "close"
+      callCloseBob = callInstanceEndpoint bobInstanceClient "close"
+      callForceCloseAlice = callInstanceEndpoint aliceInstanceClient "forceClose"
+      callForceCloseBob = callInstanceEndpoint bobInstanceClient "forceClose"
+      --callDummy = callInstanceEndpoint "dummy"
+      --callDummyPayment = callInstanceEndpoint "dummyPayment"
 
-      -- Start a channel.
-      openParams =
+      -- Endpoint Parameters
+      startParams =
         OpenParams
           { spChannelId = 42069, -- TODO: Hardcoded...
             spSigningPKs = [signingPubKeyAlice, signingPubKeyBob],
@@ -192,29 +216,77 @@ main' (CLA myWallet peerWallet) = do
             spTimeLock = defaultTimeLock
           }
 
-  runClientM (callOpen . toJSON $ openParams) clientEnv >>= \case
+      fundParams =
+        FundParams 42069 1
+
+      signingPKs = [signingPubKeyAlice, signingPubKeyBob]
+
+      stateV1 = ChannelState 42069 [defaultBalance `div` 2, (defaultBalance `div` 2) * 3] 1 False
+      signedStateV1 = update stateV1
+      stateV2 = ChannelState 42069 [defaultBalance + 5_000_000, defaultBalance - 5_000_000] 2 False
+      signedStateV2 = update stateV2
+      disputeBobParams = DisputeParams signingPKs signedStateV1
+      disputeAliceParams = DisputeParams signingPKs signedStateV2
+      forceCloseParams = ForceCloseParams 42069
+
+  -- Start Alice
+  runClientM (callStartAlice . toJSON $ startParams) clientEnv >>= \case
     Left ce -> case ce of
       f@(FailureResponse _ _) -> print f >> exitFailure
       d@(DecodeFailure _ _) -> print d >> exitFailure
       uct@(UnsupportedContentType _ _) -> print uct >> exitFailure
       icth@(InvalidContentTypeHeader _) -> print icth >> exitFailure
       cerr@(ConnectionError _) -> print cerr >> exitFailure
-    Right _ -> print ("successfully requested open for channel with ID: " <> (show . spChannelId $ openParams))
+    Right _ -> print ("Alice initialized start for channel with ID: " <> (show . spChannelId $ startParams))
 
-  threadDelay 10_000_000
+  threadDelay 120_000_000
 
-  let newState = ChannelState 42069 [defaultBalance `div` 2, (defaultBalance `div` 2) * 3] 1 True
-      signedState = update newState
-      closeParams = CloseParams [signingPubKeyAlice, signingPubKeyBob] signedState
-
-  runClientM (callClose . toJSON $ closeParams) clientEnv >>= \case
+  -- Fund Bob
+  runClientM (callFundBob . toJSON $ fundParams) clientEnv >>= \case
     Left ce -> case ce of
       f@(FailureResponse _ _) -> print f >> exitFailure
       d@(DecodeFailure _ _) -> print d >> exitFailure
       uct@(UnsupportedContentType _ _) -> print uct >> exitFailure
       icth@(InvalidContentTypeHeader _) -> print icth >> exitFailure
       cerr@(ConnectionError _) -> print cerr >> exitFailure
-    Right _ -> print ("successfully requested close for channel with ID: " <> (show . spChannelId $ openParams))
+    Right _ -> print ("Bob initialized funding for channel with ID: " <> (show . spChannelId $ startParams))
+
+  threadDelay 120_000_000
+
+  -- (Malicious) Dispute Bob
+  runClientM (callDisputeBob . toJSON $ disputeBobParams) clientEnv >>= \case
+    Left ce -> case ce of
+      f@(FailureResponse _ _) -> print f >> exitFailure
+      d@(DecodeFailure _ _) -> print d >> exitFailure
+      uct@(UnsupportedContentType _ _) -> print uct >> exitFailure
+      icth@(InvalidContentTypeHeader _) -> print icth >> exitFailure
+      cerr@(ConnectionError _) -> print cerr >> exitFailure
+    Right _ -> print ("Bob initialized malicious dispute with old state for channel with ID: " <> (show . spChannelId $ startParams))
+
+  threadDelay 120_000_000
+
+  -- Dispute Alice
+  runClientM (callDisputeAlice . toJSON $ disputeAliceParams) clientEnv >>= \case
+    Left ce -> case ce of
+      f@(FailureResponse _ _) -> print f >> exitFailure
+      d@(DecodeFailure _ _) -> print d >> exitFailure
+      uct@(UnsupportedContentType _ _) -> print uct >> exitFailure
+      icth@(InvalidContentTypeHeader _) -> print icth >> exitFailure
+      cerr@(ConnectionError _) -> print cerr >> exitFailure
+    Right _ -> print ("Alice initialized dispute with most recent state for channel with ID: " <> (show . spChannelId $ startParams))
+  print ("Waiting for timelock: " <> show defaultTimeLock <> " + chain-index lag")
+
+  threadDelay 120_000_000
+
+  -- ForceClose Alice
+  runClientM (callForceCloseAlice . toJSON $ forceCloseParams) clientEnv >>= \case
+    Left ce -> case ce of
+      f@(FailureResponse _ _) -> print f >> exitFailure
+      d@(DecodeFailure _ _) -> print d >> exitFailure
+      uct@(UnsupportedContentType _ _) -> print uct >> exitFailure
+      icth@(InvalidContentTypeHeader _) -> print icth >> exitFailure
+      cerr@(ConnectionError _) -> print cerr >> exitFailure
+    Right _ -> print ("Alice initialized force close for channel with ID: " <> (show . spChannelId $ startParams))
 
 update :: ChannelState -> SignedState
 update newState =

@@ -299,7 +299,7 @@ dispute (DisputeParams keys sst) = do
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
         Constraints.mustPayToTheScript newDatum v
-          <> Constraints.mustValidateIn (Ledger.intersection (from (t - defaultValidMsRangeSkew)) (to (t + defaultValidMsRange - defaultValidMsRangeSkew)))
+          <> Constraints.mustValidateIn (Ledger.hull (from (t - defaultValidMsRangeSkew)) (to (t + defaultValidMsRange - defaultValidMsRangeSkew)))
           <> Constraints.mustSpendScriptOutput oref r
   ledgerTx <- submitTxConstraintsWith lookups tx
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
@@ -311,12 +311,8 @@ dispute (DisputeParams keys sst) = do
 
 close :: CloseParams -> Contract w s Text ()
 close params@(CloseParams keys sst) = do
-  logInfo @P.String $ P.show params
-  logInfo @P.String $ printf "keys: %d, sst: %d" (length keys) (length (stateSigs sst))
   let s@ChannelState {..} = extractVerifiedState sst keys
-  logInfo @P.String $ printf "channel id:" channelId
   (oref, o, d@ChannelDatum {..}) <- findChannel channelId
-  logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   unless (all isLegalOutValue balances) . throwError . pack $ printf "Unable to close channel with any balance below minimum Ada"
   unless (isValidStateTransition state s) . throwError . pack $ printf "state transition invalid"
   unless final . throwError . pack $ printf "can not close unless state is final"
@@ -371,9 +367,7 @@ findChannel ::
   ChannelID ->
   Contract w s Text (TxOutRef, ChainIndexTxOut, ChannelDatum)
 findChannel cID = do
-  logInfo @P.String $ printf "A"
   utxos <- utxosAt $ channelAddress cID
-  logInfo @P.String $ printf "B"
   case Map.toList utxos of
     -- TODO: revise this!
     (oref, o) : _ -> case _ciTxOutScriptDatum o of
