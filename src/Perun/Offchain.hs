@@ -299,7 +299,7 @@ dispute (DisputeParams keys sst) = do
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
         Constraints.mustPayToTheScript newDatum v
-          <> Constraints.mustValidateIn (Ledger.hull (from (t - defaultValidMsRangeSkew)) (to (t + defaultValidMsRange - defaultValidMsRangeSkew)))
+          <> Constraints.mustValidateIn (Ledger.intersection (from (t - defaultValidMsRangeSkew)) (to (t + defaultValidMsRange - defaultValidMsRangeSkew)))
           <> Constraints.mustSpendScriptOutput oref r
   ledgerTx <- submitTxConstraintsWith lookups tx
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
