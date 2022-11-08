@@ -49,6 +49,7 @@ executable perun-client
                     , plutus-contract
                     , plutus-pab
                     , aeson
+                    , random
                     , freer-simple
                     , prettyprinter
                     , bytestring

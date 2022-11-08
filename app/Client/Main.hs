@@ -47,6 +47,7 @@ import Plutus.PAB.Webserver.Types (ContractActivationArgs (..))
 import Servant.Client (ClientError (..), mkClientEnv, runClientM)
 import Servant.Client.Core.BaseUrl (BaseUrl (..), Scheme (..), showBaseUrl)
 import System.Exit
+import System.Random.Stateful
 import Wallet.Emulator.Wallet (Wallet (..), WalletId (..))
 import Prelude hiding (concat)
 
@@ -185,6 +186,7 @@ main' (CLA aliceWallet bobWallet) = do
   print @String "started contract instances:"
   print cidAlice
   print cidBob
+  randChannelId <- randomM globalStdGen
 
   -- Create client allowing to call endpoints on `PerunContract`.
   let aliceInstanceClient = instanceClient cidAlice
@@ -209,7 +211,7 @@ main' (CLA aliceWallet bobWallet) = do
       -- Endpoint Parameters
       startParams =
         OpenParams
-          { spChannelId = 42069, -- TODO: Hardcoded...
+          { spChannelId = randChannelId,
             spSigningPKs = [signingPubKeyAlice, signingPubKeyBob],
             spPaymentPKs = pubKeyHashes,
             spBalances = [defaultBalance, defaultBalance],
@@ -217,17 +219,17 @@ main' (CLA aliceWallet bobWallet) = do
           }
 
       fundParams =
-        FundParams 42069 1
+        FundParams randChannelId 1
 
       signingPKs = [signingPubKeyAlice, signingPubKeyBob]
 
-      stateV1 = ChannelState 42069 [defaultBalance `div` 2, (defaultBalance `div` 2) * 3] 1 False
+      stateV1 = ChannelState randChannelId [defaultBalance `div` 2, (defaultBalance `div` 2) * 3] 1 False
       signedStateV1 = update stateV1
-      stateV2 = ChannelState 42069 [defaultBalance + 5_000_000, defaultBalance - 5_000_000] 2 False
+      stateV2 = ChannelState randChannelId [defaultBalance + 5_000_000, defaultBalance - 5_000_000] 2 False
       signedStateV2 = update stateV2
       disputeBobParams = DisputeParams signingPKs signedStateV1
       disputeAliceParams = DisputeParams signingPKs signedStateV2
-      forceCloseParams = ForceCloseParams 42069
+      forceCloseParams = ForceCloseParams randChannelId
 
   -- Start Alice
   runClientM (callStartAlice . toJSON $ startParams) clientEnv >>= \case
