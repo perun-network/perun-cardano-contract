@@ -370,12 +370,13 @@ findChannel cID = do
   utxos <- utxosAt $ channelAddress cID
   case Map.toList utxos of
     -- TODO: revise this!
-    (oref, o) : _ -> case _ciTxOutScriptDatum o of
+    [(oref, o)] -> case _ciTxOutScriptDatum o of
       (_, Just (Datum e)) -> case PlutusTx.fromBuiltinData e of
         Nothing -> throwError "datum has wrong type"
         Just d@ChannelDatum {} -> return (oref, o, d)
       _ -> throwError "datum missing"
-    _ -> throwError "channel utxo not found"
+    [] -> throwError "no utxo's not found"
+    utxos -> throwError . pack $ printf "Too many UTXOs found: %d" (length utxos)
 
 addFunding :: Integer -> Integer -> [Integer] -> [Integer]
 addFunding amount index f =
