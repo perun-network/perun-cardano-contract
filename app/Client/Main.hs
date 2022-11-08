@@ -22,6 +22,8 @@ import qualified Cardano.Wallet.Primitive.Types as Types
 import Cardano.Wallet.Primitive.Types.Address (Address (..))
 import Cardano.Wallet.Shelley.Compatibility ()
 import Control.Concurrent (threadDelay)
+import Control.Concurrent.Async
+import Control.Monad
 import Control.Monad ((>=>))
 import Data.Aeson (Result (..), fromJSON, toJSON)
 import Data.ByteString (concat)
@@ -49,6 +51,7 @@ import Servant.Client.Core.BaseUrl (BaseUrl (..), Scheme (..), showBaseUrl)
 import System.Exit
 import System.Random.Stateful
 import Wallet.Emulator.Wallet (Wallet (..), WalletId (..))
+import Websocket
 import Prelude hiding (concat)
 
 data CmdLineArgs = CLA
@@ -183,10 +186,10 @@ main' (CLA aliceWallet bobWallet) = do
       Left err -> print err >> exitFailure
       Right cid -> return cid
 
-  print @String "started contract instances:"
-  print cidAlice
-  print cidBob
-  randChannelId <- randomM globalStdGen
+  void . async $ runContractSubscription apiUrl cidAlice
+  void . async $ runContractSubscription apiUrl cidBob
+
+  randChannelId <- abs <$> randomM globalStdGen
 
   -- Create client allowing to call endpoints on `PerunContract`.
   let aliceInstanceClient = instanceClient cidAlice
