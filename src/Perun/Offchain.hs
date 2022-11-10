@@ -379,7 +379,7 @@ findChannel cID = do
         Nothing -> throwError "datum has wrong type"
         Just d@ChannelDatum {} -> return (oref, o, d)
       _ -> throwError "datum missing"
-    [] -> throwError "no utxo's not found"
+    [] -> throwError "no utxo's found"
     utxos -> throwError . pack $ printf "Too many UTXOs found: %d" (length utxos)
 
 addFunding :: Integer -> Integer -> [Integer] -> [Integer]
