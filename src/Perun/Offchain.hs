@@ -272,7 +272,7 @@ open OpenParams {..} = do
 dispute :: DisputeParams -> Contract w s Text ()
 dispute (DisputeParams keys sst) = do
   let dState = extractVerifiedState sst keys
-  t <- currentTime
+  now <- currentTime
   (oref, o, d@ChannelDatum {..}) <- findChannel $ channelId dState
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   unless (all isLegalOutValue (balances dState)) . throwError . pack $ printf "Unable to dispute channel with a state that contains any illegal balance (minAda)"
@@ -287,11 +287,12 @@ dispute (DisputeParams keys sst) = do
   let newDatum =
         d
           { state = dState,
-            time = t,
+            time = now,
             disputed = True
           }
       v = Ada.lovelaceValueOf . sum $ balances state
       r = Redeemer . PlutusTx.toBuiltinData $ MkDispute sst
+      range = Ledger.interval now (now + defaultValidMsRange)
 
       lookups =
         Constraints.typedValidatorLookups (typedChannelValidator $ channelId dState)
@@ -299,8 +300,11 @@ dispute (DisputeParams keys sst) = do
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
       tx =
         Constraints.mustPayToTheScript newDatum v
-          <> Constraints.mustValidateIn (Ledger.intersection (from (t - defaultValidMsRangeSkew)) (to (t + defaultValidMsRange - defaultValidMsRangeSkew)))
+          <> Constraints.mustValidateIn range
           <> Constraints.mustSpendScriptOutput oref r
+  -- Wait one slot, otherwise we send the TX before the defined lower bound,
+  -- because `currentTime` returns the POSIXTime aligned to the current slot.
+  void $ waitNSlots 1
   ledgerTx <- submitTxConstraintsWith lookups tx
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $ printf "made dispute of new state %s" (P.show dState)
