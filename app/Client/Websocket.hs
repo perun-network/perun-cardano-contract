@@ -24,29 +24,23 @@ runContractSubscription (BaseUrl _ host port _) cid = do
 data SubscriptionError
   = UnexpectedBinaryMessageErr
   | UnexpectedMessageTypeErr
+  | WSConnectionException ConnectionException
   deriving (Show)
 
 instance Exception SubscriptionError
 
 contractSub :: Connection -> IO ()
-contractSub conn =
-  catch
-    ( go `catch` \err -> do
+contractSub conn = go `catch` \err -> do
         case err of
           UnexpectedBinaryMessageErr -> logError . pack . show $ UnexpectedBinaryMessageErr
           UnexpectedMessageTypeErr -> logError . pack . show $ UnexpectedMessageTypeErr
+          WSConnectionException (ParseException s) -> logError . pack $ s
+          -- Rethrow broken connection exceptions.
+          WSConnectionException exception -> throw exception
+        logInfo "Continuing reading from stream"
+        -- Continue reading from subscription.
         go
-    )
-    $ \err -> do
-      case err of
-        ParseException s -> logError . pack $ s
-        -- Rethrow broken connection exceptions.
-        exception -> throw exception
-      logInfo "Continuing reading from stream"
-      go
   where
-    -- Continue reading from subscription.
-
     go = do
       mmsg <-
         receiveDataMessage conn >>= \case
