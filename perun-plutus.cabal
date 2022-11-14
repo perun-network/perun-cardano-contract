@@ -96,6 +96,7 @@ library
     exposed-modules: Perun
                    , Perun.Onchain
                    , Perun.Offchain
+                   , Perun.Error
                    , PAB
 
     -- Modules included in this library but not exported.
