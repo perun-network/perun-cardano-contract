@@ -17,21 +17,21 @@
 
 module PerunPlutus.PerunSpec where
 
+import qualified Cardano.Crypto.Wallet as Crypto
 import Control.Lens hiding (both)
 import Control.Monad
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Data
 import qualified Data.Semigroup as Semigroup
-import Data.Text (Text)
 import Ledger hiding (version)
 import qualified Ledger.Ada as Ada
 import qualified Ledger.Value as Value
 import Perun hiding (ChannelAction (..))
+import Perun.Error
 import PerunPlutus.Test.EvilContract
 import Plutus.Contract.Oracle
 import qualified Plutus.Contract.Request as Trace
 import Plutus.Contract.Test (Wallet, mockWalletPaymentPubKey, mockWalletPaymentPubKeyHash, w1, w2, w3, w4)
-import qualified Cardano.Crypto.Wallet as Crypto
 import Plutus.Contract.Test.ContractModel
 import qualified Plutus.Contract.Types as ET
 import qualified Plutus.Trace.Effects.Assert as TA (assert)
@@ -104,8 +104,8 @@ instance ContractModel PerunModel where
     -- Only one type of contract under test, so we define the
     -- `ContractInstanceKey` with a single constructor distinguished by the
     -- wallet they are running in.
-    Participant :: Wallet -> ContractInstanceKey PerunModel () ChannelSchema Text ()
-    Adversary :: Wallet -> ContractInstanceKey PerunModel EvilContractState EvilSchema Text ()
+    Participant :: Wallet -> ContractInstanceKey PerunModel () ChannelSchema PerunError ()
+    Adversary :: Wallet -> ContractInstanceKey PerunModel EvilContractState EvilSchema PerunError ()
 
   -- Start contract instances for the perun contract `Participant` and a
   -- malicious contract `Adversary`.
