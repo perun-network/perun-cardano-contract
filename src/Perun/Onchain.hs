@@ -56,17 +56,15 @@ import Ledger
     PaymentPubKeyHash (..),
     Signature,
     UpperBound (..),
-    Value (..),
+    Value,
     contains,
     from,
     fromMilliSeconds,
     member,
     minAdaTxOut,
-    scriptHashAddress,
     strictLowerBound,
     strictUpperBound,
     toPubKeyHash,
-    txOutDatumHash,
   )
 import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
