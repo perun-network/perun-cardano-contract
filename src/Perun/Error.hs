@@ -1,3 +1,6 @@
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 -- | Module describing the offchain errors the Perun-Contract
@@ -9,6 +12,8 @@ module Perun.Error
 where
 
 import Control.Lens
+import Data.Aeson
+import GHC.Generics (Generic)
 import Plutus.Contract
 
 data PerunError
@@ -55,7 +60,8 @@ data PerunError
     -- TODO: This most likely has to be removed, since we cannot prevent
     -- anyone from just sending UTXOs to our channel.
     FindChannelUnexpectedNumberOfUTXOsError
-  deriving (Eq, Show)
+  deriving (Eq, Show, Generic)
+  deriving anyclass (ToJSON, FromJSON)
 
 makeClassyPrisms ''PerunError
 
