@@ -287,11 +287,29 @@ dispute (DisputeParams keys sst) = do
   let newDatum =
         d
           { state = dState,
-            time = now,
+            time = now + 1,
             disputed = True
           }
       v = Ada.lovelaceValueOf . sum $ balances state
       r = Redeemer . PlutusTx.toBuiltinData $ MkDispute sst
+      -- Notes on time-handling:
+      --  * currentTime returns the last POSIX time belonging to the current slot (which means it ends with "999" for the current SlotConfig)
+      --  * In theory, one would assume that:
+      --    * now = currentTime
+      --    * mustValidateIn Constraint = [now, _]
+      --    * timestamp in outputDatum = now
+      --    => the on-chain validator would evaluate "timestamp `member` validTimeRange" to true but THIS IS NOT THE CASE!
+      --  * We observe that if we set the timestamp to now + 1 (which is exactly the beginning of the next slot), the validator actually
+      --    evaluates "timestamp `member` validTimeRange" to true!
+      --  * Consequently, we assume that somewhere in the PAB, the wallet or the node the conversion between slots and POSIXTime is mishandled.
+      --  * We still use this API as we assume it is supposed to be used here and just apply the "timestamp + 1" hack because:
+      --    * Handling this appropriately would mean setting the mustValidateIn constraint to "[now - slotLength, _]" but we can not access the
+      --      slotLength conveniently
+      --    * Adjusting the timestamp by 1 ms is irrelevant for our use case as channels deal with substantially longer timelocks and we can only
+      --      assume the timestamp to be accurate to the degree of the length of the valid range when validating on-chain anyways.
+      --      (See relative timelock documentation)
+      --    * We agreed to go back to this issue if this either gets fixed in the PAB, the wallet or the node, or if our assumptions above turn out
+      --      to be invalid
       range = Ledger.interval now (now + defaultValidMsRange)
 
       lookups =
@@ -304,7 +322,7 @@ dispute (DisputeParams keys sst) = do
           <> Constraints.mustSpendScriptOutput oref r
   -- Wait one slot, otherwise we send the TX before the defined lower bound,
   -- because `currentTime` returns the POSIXTime aligned to the current slot.
-  void $ waitNSlots 1
+  --  void $ waitNSlots 1
   ledgerTx <- submitTxConstraintsWith lookups tx
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $ printf "made dispute of new state %s" (P.show dState)
