@@ -98,7 +98,7 @@ singleDisputeTest (wa, wb, wf) = do
 -- | A maliciously disputes with the outdated State 1
 -- | (where A still has more money),
 -- | A disputes with the newer (newest) State 2,
--- | A can not dispute with a newer signed state,
+-- | B can not dispute with a newer signed state,
 -- | B force-closes the channel after waiting for the timelock to expire
 maliciousDisputeTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 maliciousDisputeTest (wa, wb, wf) = do
@@ -121,6 +121,7 @@ maliciousDisputeTest (wa, wb, wf) = do
   action $ Update secondUpdate
 
   action $ Dispute wa [wa, wb] channelID firstUpdate
+  action $ Wait 1
   action $ Dispute wb [wa, wb] channelID secondUpdate
 
   action $ Wait defaultTimeLockSlots
