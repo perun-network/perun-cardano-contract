@@ -5,7 +5,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -150,7 +149,7 @@ dummyPayment key = do
 start :: OpenParams -> Contract w s PerunError ()
 start OpenParams {..} = do
   unless (all isLegalOutValue spBalances) . throwError $ InsufficientMinimumAdaFundingError
-  t <- currentTime
+  now <- currentTime
   let c =
         Channel
           { pTimeLock = spTimeLock,
@@ -168,7 +167,7 @@ start OpenParams {..} = do
         ChannelDatum
           { channelParameters = c,
             state = s,
-            time = t,
+            time = now + 1,
             funding = head spBalances : tail (map (const 0) spBalances),
             funded = False,
             disputed = False
@@ -278,11 +277,8 @@ dispute (DisputeParams keys sst) = do
   (oref, o, d@ChannelDatum {..}) <- findChannel $ channelId dState
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   unless (all isLegalOutValue (balances dState)) . throwError $ InsufficientMinimumAdaFundingError
-  unless (isValidStateTransition state dState)
-    . throwError $ InvalidStateTransitionError
-  unless funded
-    . throwError
-    $ PrematureDisputeError
+  unless (isValidStateTransition state dState) . throwError $ InvalidStateTransitionError
+  unless funded . throwError $ PrematureDisputeError
   let newDatum =
         d
           { state = dState,
@@ -319,12 +315,9 @@ dispute (DisputeParams keys sst) = do
         Constraints.mustPayToTheScript newDatum v
           <> Constraints.mustValidateIn range
           <> Constraints.mustSpendScriptOutput oref r
-  -- Wait one slot, otherwise we send the TX before the defined lower bound,
-  -- because `currentTime` returns the POSIXTime aligned to the current slot.
-  --  void $ waitNSlots 1
   ledgerTx <- submitTxConstraintsWith lookups tx
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
-  logInfo @P.String $ printf "made dispute of new state %s" (P.show dState)
+  logInfo @P.String $ printf "made dispute of new state with datum: %s" (P.show newDatum)
 
 --
 -- close channel
@@ -390,7 +383,6 @@ findChannel ::
 findChannel cID = do
   utxos <- utxosAt $ channelAddress cID
   case Map.toList utxos of
-    -- TODO: revise this!
     [(oref, o)] -> case _ciTxOutScriptDatum o of
       (_, Just (Datum e)) -> case PlutusTx.fromBuiltinData e of
         Nothing -> throwError FindChannelWrongDatumTypeError
@@ -408,7 +400,19 @@ addFunding amount index f =
 -- Top-level contract, exposing all endpoints.
 --
 contract :: Contract () ChannelSchema PerunError ()
-contract = selectList [start', fund', abort', open', dispute', close', forceClose', dummy', dummyPayment'] >> contract
+contract =
+  selectList
+    [ start',
+      fund',
+      abort',
+      open',
+      dispute',
+      close',
+      forceClose',
+      dummy',
+      dummyPayment'
+    ]
+    >> contract
   where
     start' = endpoint @"start" start
     fund' = endpoint @"fund" fund

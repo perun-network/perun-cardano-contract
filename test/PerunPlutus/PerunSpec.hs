@@ -195,7 +195,6 @@ instance ContractModel PerunModel where
           PerunModel Nothing -> P.error "Update only works on existing channels"
           PerunModel (Just (_, tl, newFunding, newFunded)) -> PerunModel . Just $ (cs, tl, newFunding, newFunded)
       )
-  -- TODO add disputed bit to PerunModel and handle it here!
   nextState Dispute {} = do
     modifyContractState
       ( \case

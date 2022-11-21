@@ -11,7 +11,6 @@ import PerunPlutus.Test.EvilContract
 import Plutus.Contract.Test
 import Plutus.Contract.Test.ContractModel
 import Test.QuickCheck
-import Test.QuickCheck (Property)
 import Test.Tasty (TestTree)
 import Test.Tasty.QuickCheck
 
@@ -97,8 +96,8 @@ singleDisputeTest (wa, wb, wf) = do
 -- | A issues another payment to B (-> State 2),
 -- | A maliciously disputes with the outdated State 1
 -- | (where A still has more money),
--- | A disputes with the newer (newest) State 2,
--- | B can not dispute with a newer signed state,
+-- | B disputes with the newer (newest) State 2,
+-- | A can not dispute with a newer signed state,
 -- | B force-closes the channel after waiting for the timelock to expire
 maliciousDisputeTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 maliciousDisputeTest (wa, wb, wf) = do
@@ -262,6 +261,7 @@ prop_SingleDisputeTest = withMaxSuccess 1 $ forAllDL (singleDisputeTest (w1, w2,
 prop_MaliciousDisputeTest :: Property
 prop_MaliciousDisputeTest = withMaxSuccess 1 $ forAllDL (maliciousDisputeTest (w1, w2, w3)) propPerun
 
+
 prop_TwoPartyFundingAndPaymentTest :: Property
 prop_TwoPartyFundingAndPaymentTest = withMaxSuccess 1 $ forAllDL (twoPartyFundingAndPaymentTest (w1, w2)) propPerun
 
@@ -270,6 +270,7 @@ prop_TwoPartyFundingAbortTest = withMaxSuccess 1 $ forAllDL (twoPartyFundingAbor
 
 prop_ThreePartyFundingAndPaymentTest :: Property
 prop_ThreePartyFundingAndPaymentTest = withMaxSuccess 1 $ forAllDL (threePartyFundingAndPaymentTest (w1, w2, w3)) propPerun
+
 
 prop_ThreePartyFundingAbortTest :: Property
 prop_ThreePartyFundingAbortTest = withMaxSuccess 1 $ forAllDL (threePartyFundingAbortTest (w1, w2, w3)) propPerun
