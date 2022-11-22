@@ -24,7 +24,7 @@ runContractSubscription (BaseUrl _ host port _) cid = do
 data SubscriptionError
   = UnexpectedBinaryMessageErr
   | UnexpectedMessageTypeErr
-  | WSConnectionException ConnectionException
+  | WSConnectionException !ConnectionException
   deriving (Show)
 
 instance Exception SubscriptionError
