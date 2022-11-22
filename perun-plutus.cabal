@@ -42,6 +42,7 @@ executable perun-client
   hs-source-dirs:   app/Client
   other-modules:    Websocket
                     Client
+                    Multi
   build-depends:    perun-plutus
                     , plutus-contract
                     , plutus-pab
@@ -54,6 +55,7 @@ executable perun-client
                     , bytestring
                     , freer-extras
                     , plutus-ledger
+                    , containers
                     , lens
                     , mtl
                     , websockets
