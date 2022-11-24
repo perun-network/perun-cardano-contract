@@ -17,21 +17,18 @@
 
 module Perun.Offchain where
 
-import Cardano.Api (serialiseToTextEnvelope)
 import Control.Monad hiding (fmap)
 import Data.Aeson (FromJSON, ToJSON)
 import Data.List (genericSplitAt)
 import Data.Map as Map hiding (drop, map)
-import Data.Text (Text, pack)
-import Data.Void
 import GHC.Generics (Generic)
 import Ledger hiding (singleton)
 import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
 import Ledger.Constraints.OffChain ()
-import Ledger.Scripts
 import Perun.Error
 import Perun.Onchain
+import Plutus.ChainIndex.Types hiding (ChainIndexTxOut)
 import Plutus.Contract
 import qualified PlutusTx
 import PlutusTx.Prelude hiding (unless)
@@ -319,6 +316,24 @@ dispute (DisputeParams keys sst) = do
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $ printf "made dispute of new state with datum: %s" (P.show newDatum)
 
+retryAfterSync :: (AsContractError e) => Contract w s e a -> Contract w s e a
+retryAfterSync action = do
+  slot <- currentPABSlot
+  awaitChainIndexSlot slot
+  action
+
+awaitChainIndexSlot :: (AsContractError e) => Slot -> Contract w s e ()
+awaitChainIndexSlot targetSlot = do
+  chainIndexTip <- getTip
+  let chainIndexSlot = getChainIndexSlot chainIndexTip
+  when (chainIndexSlot < targetSlot) $ do
+    void $ waitNSlots 1
+    awaitChainIndexSlot targetSlot
+  where
+    getChainIndexSlot :: Tip -> Slot
+    getChainIndexSlot TipAtGenesis = Slot 0
+    getChainIndexSlot (Tip slot _ _) = slot
+
 --
 -- close channel
 --
@@ -376,6 +391,18 @@ forceClose (ForceCloseParams cId) = do
 -- | Calculates the earliest time a channel can be force-closed for given parameters.
 earliestFirstCloseTime :: POSIXTime -> Integer -> POSIXTime
 earliestFirstCloseTime timeStamp timeLock = timeStamp + POSIXTime timeLock
+
+-- | findChannelWithSync is an optimistic findChannel handler. It first tries
+-- to find a channel and if not successful, retries it again AFTER making sure
+-- to synchronize with the chainindex to its current slot.
+findChannelWithSync :: ChannelID -> Contract w s PerunError (TxOutRef, ChainIndexTxOut, ChannelDatum)
+findChannelWithSync cid =
+  handleError errorHandler $ findChannel cid
+  where
+    errorHandler (FindChannelError _) = do
+      logWarn @P.String "Optimistic findChannel not succeeded. Trying again after syncing PAB with Chainindex."
+      retryAfterSync $ findChannel cid
+    errorHandler err = throwError err -- rethrow other errors.
 
 findChannel ::
   ChannelID ->
