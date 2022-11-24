@@ -7,6 +7,7 @@
 -- implementation can emit.
 module Perun.Error
   ( PerunError (..),
+    FindChannelException(..),
     AsPerunError (..),
   )
 where
@@ -48,18 +49,23 @@ data PerunError
   | -- | Thrown when force close on a channel is called, which was not
     -- already funded.
     ForceCloseOnNonFundedChannelError
-  | -- | Thrown when no UTXO is found, which contains a valid channel
+  | FindChannelError !FindChannelException
+  deriving (Eq, Show, Generic)
+  deriving anyclass (ToJSON, FromJSON)
+
+data FindChannelException
+  = -- | Thrown when no UTXO is found, which contains a valid channel
     -- datum.
-    FindChannelWrongDatumTypeError
-  | -- | Thrown when no UTXO is found, which contains any datum.
-    FindChannelDatumMissingError
+    WrongDatumTypeError
+  | --  | Thrown when no UTXO is found, which contains any datum.
+    DatumMissingError
   | -- | Thrown when no UTXOs are found.
-    FindChannelNoUTXOsError
+    NoUTXOsError
   | -- | Thrown when an unexpected number of UTXOs are found for a given
     -- channel id.
     -- TODO: This most likely has to be removed, since we cannot prevent
     -- anyone from just sending UTXOs to our channel.
-    FindChannelUnexpectedNumberOfUTXOsError
+    UnexpectedNumberOfUTXOsError
   deriving (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 

@@ -385,11 +385,11 @@ findChannel cID = do
   case Map.toList utxos of
     [(oref, o)] -> case _ciTxOutScriptDatum o of
       (_, Just (Datum e)) -> case PlutusTx.fromBuiltinData e of
-        Nothing -> throwError FindChannelWrongDatumTypeError
+        Nothing -> throwError . FindChannelError $ WrongDatumTypeError
         Just d@ChannelDatum {} -> return (oref, o, d)
-      _otherwise -> throwError FindChannelDatumMissingError
-    [] -> throwError FindChannelNoUTXOsError
-    _utxos -> throwError FindChannelUnexpectedNumberOfUTXOsError
+      _otherwise -> throwError . FindChannelError $ DatumMissingError
+    [] -> throwError . FindChannelError $ NoUTXOsError
+    _utxos -> throwError . FindChannelError $ UnexpectedNumberOfUTXOsError
 
 addFunding :: Integer -> Integer -> [Integer] -> [Integer]
 addFunding amount index f =
