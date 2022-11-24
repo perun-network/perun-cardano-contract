@@ -261,7 +261,6 @@ prop_SingleDisputeTest = withMaxSuccess 1 $ forAllDL (singleDisputeTest (w1, w2,
 prop_MaliciousDisputeTest :: Property
 prop_MaliciousDisputeTest = withMaxSuccess 1 $ forAllDL (maliciousDisputeTest (w1, w2, w3)) propPerun
 
-
 prop_TwoPartyFundingAndPaymentTest :: Property
 prop_TwoPartyFundingAndPaymentTest = withMaxSuccess 1 $ forAllDL (twoPartyFundingAndPaymentTest (w1, w2)) propPerun
 
@@ -270,7 +269,6 @@ prop_TwoPartyFundingAbortTest = withMaxSuccess 1 $ forAllDL (twoPartyFundingAbor
 
 prop_ThreePartyFundingAndPaymentTest :: Property
 prop_ThreePartyFundingAndPaymentTest = withMaxSuccess 1 $ forAllDL (threePartyFundingAndPaymentTest (w1, w2, w3)) propPerun
-
 
 prop_ThreePartyFundingAbortTest :: Property
 prop_ThreePartyFundingAbortTest = withMaxSuccess 1 $ forAllDL (threePartyFundingAbortTest (w1, w2, w3)) propPerun

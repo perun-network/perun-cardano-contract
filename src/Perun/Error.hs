@@ -7,7 +7,7 @@
 -- implementation can emit.
 module Perun.Error
   ( PerunError (..),
-    FindChannelException(..),
+    FindChannelException (..),
     AsPerunError (..),
   )
 where

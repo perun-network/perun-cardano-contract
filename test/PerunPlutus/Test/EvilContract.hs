@@ -141,8 +141,9 @@ fundAlreadyFunded :: ChannelID -> Contract EvilContractState s PerunError ()
 fundAlreadyFunded cid = do
   (oref, o, d@ChannelDatum {..}) <- findChannel cid
   if not funded
-    then throwError . PerunContractError . OtherContractError
-      $ "EVIL_CONTRACT: endpoint only works for already funded channels"
+    then
+      throwError . PerunContractError . OtherContractError $
+        "EVIL_CONTRACT: endpoint only works for already funded channels"
     else do
       logInfo @P.String $ printf "EVIL_CONTRACT: found channel utxo with datum %s" (P.show d)
       let newDatum = d

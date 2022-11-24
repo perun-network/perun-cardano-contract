@@ -158,9 +158,9 @@ instance (SymbolList ss, KnownSymbol s) => SymbolList (s ': ss) where
 
 -- | FindActor looks up an actor in the given type level list of actors.
 type family FindActor (actor :: Symbol) (actors :: [Symbol]) where
--- We use an explicit `TypeError` message here instead of keeping this
--- function generic, since it is only meant to be used in this specific
--- context.
+  -- We use an explicit `TypeError` message here instead of keeping this
+  -- function generic, since it is only meant to be used in this specific
+  -- context.
   FindActor actor '[] =
     TypeError
       ( 'ShowType actor

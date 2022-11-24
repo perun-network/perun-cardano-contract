@@ -13,8 +13,10 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
-module PAB (
-  StarterContracts(..)) where
+module PAB
+  ( StarterContracts (..),
+  )
+where
 
 import Data.Aeson
   ( FromJSON (..),

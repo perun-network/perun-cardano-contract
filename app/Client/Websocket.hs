@@ -30,16 +30,17 @@ data SubscriptionError
 instance Exception SubscriptionError
 
 contractSub :: Connection -> IO ()
-contractSub conn = go `catch` \err -> do
-        case err of
-          UnexpectedBinaryMessageErr -> logError . pack . show $ UnexpectedBinaryMessageErr
-          UnexpectedMessageTypeErr -> logError . pack . show $ UnexpectedMessageTypeErr
-          WSConnectionException (ParseException s) -> logError . pack $ s
-          -- Rethrow broken connection exceptions.
-          WSConnectionException exception -> throw exception
-        logInfo "Continuing reading from stream"
-        -- Continue reading from subscription.
-        go
+contractSub conn =
+  go `catch` \err -> do
+    case err of
+      UnexpectedBinaryMessageErr -> logError . pack . show $ UnexpectedBinaryMessageErr
+      UnexpectedMessageTypeErr -> logError . pack . show $ UnexpectedMessageTypeErr
+      WSConnectionException (ParseException s) -> logError . pack $ s
+      -- Rethrow broken connection exceptions.
+      WSConnectionException exception -> throw exception
+    logInfo "Continuing reading from stream"
+    -- Continue reading from subscription.
+    go
   where
     go = do
       mmsg <-
