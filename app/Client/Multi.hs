@@ -19,18 +19,19 @@
 
 -- | Multi is a multi client environment which allows interleaving multiple
 -- `PerunClient`s.
-module Multi (
-  MultiClientState(..),
-  actors,
-  MultiClientError(..),
-  runMultiClientWith,
-  delayAll,
-  callEndpointFor,
-  actionBy,
-  subscribeToContractEvents,
-  update,
-  mapAllClients,
-  )where
+module Multi
+  ( MultiClientState (..),
+    actors,
+    MultiClientError (..),
+    runMultiClientWith,
+    delayAll,
+    callEndpointFor,
+    actionBy,
+    subscribeToContractEvents,
+    update,
+    mapAllClients,
+  )
+where
 
 import Client
 import Control.Concurrent (threadDelay)
@@ -77,7 +78,9 @@ runMultiClientWith creds action = do
     let actorsList = symbolList @actors
         actorStates = Map.fromList . zip actorsList $ creds
     logInfo $ "Running MultiClient with set of participants: " <> (pack . unwords $ actorsList)
-    flip evalStateT (MultiClientState actorStates) . runExceptT . unMultiClient $ action
+    res <- flip evalStateT (MultiClientState actorStates) . runExceptT . unMultiClient $ action
+    logInfo "MultiClient trace done."
+    return res
 
 delayAll :: Int -> MultiClient actors ()
 delayAll ms = do
