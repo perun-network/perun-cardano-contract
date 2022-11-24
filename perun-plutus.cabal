@@ -107,6 +107,7 @@ library
                       , data-default
                       , plutus-contract
                       , plutus-ledger
+                      , plutus-tx-plugin
                       , plutus-ledger-api
                       , plutus-ledger-constraints
                       , plutus-script-utils
