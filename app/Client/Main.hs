@@ -149,7 +149,8 @@ main' (CLA aliceWallet bobWallet network) = do
           FundParams randChannelId 1
 
         stateV1 = ChannelState randChannelId [defaultBalance `div` 2, (defaultBalance `div` 2) * 3] 1 False
-        stateV2 = ChannelState randChannelId [defaultBalance + 5_000_000, defaultBalance - 5_000_000] 2 False
+        change = defaultBalance `div` 4
+        stateV2 = ChannelState randChannelId [defaultBalance + change, defaultBalance - change] 2 False
         forceCloseParams = ForceCloseParams randChannelId
     signedStateV1 <- update stateV1
     signedStateV2 <- update stateV2
