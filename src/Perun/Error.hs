@@ -22,7 +22,7 @@ data PerunError
     -- together with Perun specific contract errors.
     PerunContractError !ContractError
   | -- | Thrown when a party has balances remaining within (0, minAda).
-    InsufficientMinimumAdaFundingError
+    InsufficientMinimumAdaBalanceError
   | -- | Thrown when an already funded channel is funded again.
     RedundantFundError
   | -- | Thrown when trying to abort an already funded channel.
