@@ -20,10 +20,12 @@ import Data.Either
 import Data.Proxy
 import Data.Text (Text, pack)
 import Data.Text.Class (fromText)
+import GHC.TypeLits hiding (Mod)
 import Ledger (PaymentPubKeyHash (..))
 import qualified Ledger.Crypto as Crypto
 import Multi
 import Options.Applicative hiding (Success)
+import Options.Applicative.Types
 import Perun (DisputeParams (..), ForceCloseParams (..), FundParams (..))
 import Perun.Offchain (OpenParams (..))
 import Perun.Onchain (ChannelState (..))
@@ -35,7 +37,8 @@ import Prelude hiding (concat)
 
 data CmdLineArgs = CLA
   { myWallet :: !Wallet,
-    peerPaymentPubKey :: !Wallet
+    peerPaymentPubKey :: !Wallet,
+    testnetMagic :: !SomeNetworkDiscriminant
   }
 
 cmdLineParser :: Parser CmdLineArgs
@@ -44,20 +47,46 @@ cmdLineParser =
     <$> parseWallet
       ( long "walletid"
           <> short 'a'
+          <> metavar "WALLET-ID"
           <> help
             "Alice's wallet identifier"
       )
     <*> parseWallet
       ( long "walletid-peer"
           <> short 'b'
+          <> metavar "WALLET-ID"
           <> help
             "Bob's wallet identifier"
+      )
+    <*> parseSomeNetworkDiscriminant
+      ( long "testnet-id"
+          <> short 'i'
+          <> metavar "ID"
+          <> help
+            "Specify the testnet id to use"
       )
   where
     parseWallet :: Mod OptionFields String -> Parser Wallet
     parseWallet opts = Wallet Nothing . WalletId . right . fromText . pack <$> strOption opts
     right (Right a) = a
     right _ = error "parsing failed"
+    parseSomeNetworkDiscriminant :: Mod OptionFields Integer -> Parser SomeNetworkDiscriminant
+    parseSomeNetworkDiscriminant opts = parseNetworkDiscriminant <$> intOption opts
+      where
+        parseNetworkDiscriminant :: Integer -> SomeNetworkDiscriminant
+        parseNetworkDiscriminant i =
+          case someNatVal i of
+            Nothing -> error "invalid testnet-id given"
+            Just (SomeNat p) -> mkSomeNetworkDiscriminant p
+
+        mkSomeNetworkDiscriminant :: forall n. KnownNat n => Proxy n -> SomeNetworkDiscriminant
+        mkSomeNetworkDiscriminant _ = SomeNetworkDiscriminant (Proxy @('Testnet n))
+
+        intOption :: Mod OptionFields Integer -> Parser Integer
+        intOption = option int
+
+        int :: ReadM Integer
+        int = read @Integer <$> readerAsk
 
 defaultTimeLock :: Integer
 defaultTimeLock = 90 * 1000
@@ -80,13 +109,13 @@ walletId :: Wallet -> Types.WalletId
 walletId (Wallet _ (WalletId wid)) = wid
 
 main' :: CmdLineArgs -> IO ()
-main' (CLA aliceWallet bobWallet) = do
-  let testnet = SomeNetworkDiscriminant (Proxy @('Testnet 42))
+main' (CLA aliceWallet bobWallet network) = do
+  let -- network = SomeNetworkDiscriminant (Proxy @('Testnet 42))
       walletURL = BaseUrl Http "localhost" 8090 ""
       apiURL = Plutus.PAB.Types.baseUrl defaultWebServerConfig
   mstates <-
     mapM
-      (runPerunClientInitializer . uncurry (withWallet testnet walletURL apiURL))
+      (runPerunClientInitializer . uncurry (withWallet network walletURL apiURL))
       [ (aliceWallet, (alicePhrase, alicePassphrase)),
         (bobWallet, (bobPhrase, bobPassphrase))
       ]
