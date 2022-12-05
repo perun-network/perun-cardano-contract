@@ -56,17 +56,15 @@ import Ledger
     PaymentPubKeyHash (..),
     Signature,
     UpperBound (..),
-    Value (..),
+    Value,
     contains,
     from,
     fromMilliSeconds,
     member,
     minAdaTxOut,
-    scriptHashAddress,
     strictLowerBound,
     strictUpperBound,
     toPubKeyHash,
-    txOutDatumHash,
   )
 import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
@@ -157,15 +155,6 @@ instance Eq SignedState where
   {-# INLINEABLE (==) #-}
   a == b = stateSigs a == stateSigs b
 
--- TODO: investigate why the DatumHash Schema does not work:
--- FormSchemaArray
---   (FormSchemaTuple
---     (FormSchemaObject [("getSignature",FormSchemaString)])
---     (FormSchemaTuple
---       (FormSchemaUnsupported "Unsupported, non-record constructor.")
---       (FormSchemaObject [("channelId",FormSchemaInteger),("balances",FormSchemaArray FormSchemaInteger),("version",FormSchemaInteger),("final",FormSchemaBool)])
---     )
---   )
 instance ToSchema SignedState where
   toSchema = FormSchemaArray (toSchema @(Signature, (DatumHash, ChannelState)))
 
@@ -173,7 +162,7 @@ PlutusTx.unstableMakeIsData ''SignedState
 PlutusTx.makeLift ''SignedState
 
 -- Redeemer Datatype
-data ChannelAction = Fund | Abort | MkDispute SignedState | MkClose SignedState | ForceClose
+data ChannelAction = Fund | Abort | MkDispute !SignedState | MkClose !SignedState | ForceClose
   deriving (P.Show, Generic, ToJSON, FromJSON)
 
 PlutusTx.unstableMakeIsData ''ChannelAction
@@ -350,11 +339,11 @@ mkChannelValidator cID oldDatum action ctx =
     input =
       let isScriptInput i = case (txOutDatum . txInInfoResolved) i of
             NoOutputDatum -> False
-            _ -> True
+            _otherwise -> True
           xs = [i | i <- txInfoInputs info, isScriptInput i]
        in case xs of
             [i] -> i
-            _ -> traceError "expected exactly one script input"
+            _otherwise -> traceError "expected exactly one script input"
 
     inVal :: Value
     inVal = txOutValue . txInInfoResolved $ input
@@ -382,7 +371,7 @@ mkChannelValidator cID oldDatum action ctx =
         OutputDatumHash h -> case findDatum h info of
           Nothing -> traceError "datum not found"
           Just (Datum d) -> resolveDatumTarget o d
-      _ -> traceError "expected exactly one continuing output"
+      _otherwise -> traceError "expected exactly one continuing output"
 
     channelIntegrityAtFunding :: Bool
     channelIntegrityAtFunding =

@@ -5,7 +5,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -18,20 +17,18 @@
 
 module Perun.Offchain where
 
-import Cardano.Api (serialiseToTextEnvelope)
 import Control.Monad hiding (fmap)
 import Data.Aeson (FromJSON, ToJSON)
 import Data.List (genericSplitAt)
 import Data.Map as Map hiding (drop, map)
-import Data.Text (Text, pack)
-import Data.Void
 import GHC.Generics (Generic)
 import Ledger hiding (singleton)
 import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
 import Ledger.Constraints.OffChain ()
-import Ledger.Scripts
+import Perun.Error
 import Perun.Onchain
+import Plutus.ChainIndex.Types hiding (ChainIndexTxOut)
 import Plutus.Contract
 import qualified PlutusTx
 import PlutusTx.Prelude hiding (unless)
@@ -101,7 +98,7 @@ type ChannelSchema =
     .\/ Endpoint "dummy" Integer
     .\/ Endpoint "dummyPayment" PaymentPubKeyHash
 
-dummy :: Integer -> Contract w s Text ()
+dummy :: Integer -> Contract w s PerunError ()
 dummy cid = do
   logInfo @P.String $ printf "Dummy: Started dummy endpoint"
   let c =
@@ -133,7 +130,7 @@ dummy cid = do
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $ printf "Dummy: Finished dummy endpoint"
 
-dummyPayment :: PaymentPubKeyHash -> Contract w s Text ()
+dummyPayment :: PaymentPubKeyHash -> Contract w s PerunError ()
 dummyPayment key = do
   let txConstr =
         Constraints.mustPayToPubKey key (Ada.lovelaceValueOf 10_000_000)
@@ -146,10 +143,10 @@ dummyPayment key = do
 -- open channel
 --
 
-start :: OpenParams -> Contract w s Text ()
+start :: OpenParams -> Contract w s PerunError ()
 start OpenParams {..} = do
-  unless (all isLegalOutValue spBalances) . throwError . pack $ printf "Unable to start channel with any balance below minimum Ada"
-  t <- currentTime
+  unless (all isLegalOutValue spBalances) . throwError $ InsufficientMinimumAdaBalanceError
+  now <- currentTime
   let c =
         Channel
           { pTimeLock = spTimeLock,
@@ -167,7 +164,7 @@ start OpenParams {..} = do
         ChannelDatum
           { channelParameters = c,
             state = s,
-            time = t,
+            time = now + 1,
             funding = head spBalances : tail (map (const 0) spBalances),
             funded = False,
             disputed = False
@@ -178,13 +175,13 @@ start OpenParams {..} = do
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $ printf "Started funding for channel %d with parameters %s and value %s" spChannelId (P.show c) (P.show v)
 
-fund :: FundParams -> Contract w s Text ()
+fund :: FundParams -> Contract w s PerunError ()
 fund FundParams {..} = do
-  (oref, o, d@ChannelDatum {..}) <- findChannel fpChannelId
+  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync fpChannelId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   -- TODO add more checks before funding
-  unless (all isLegalOutValue (balances state)) . throwError . pack $ printf "Unable to fund channel with any balance below minimum Ada"
-  when funded . throwError . pack $ printf "can only fund channel that is not already funded"
+  unless (all isLegalOutValue (balances state)) . throwError $ InsufficientMinimumAdaBalanceError
+  when funded . throwError $ RedundantFundError
   let -- TODO avoid using list-indexing with !!
       --      try to use fixed-sized arrays instead
       newFunding = addFunding (balances state !! fpIndex) fpIndex funding
@@ -209,12 +206,13 @@ fund FundParams {..} = do
   --      try to use fixed-sized arrays instead
   logInfo @P.String $ printf "Funded %d Lovelace for party %d on channel %d" (balances state !! fpIndex) fpIndex fpChannelId
 
-abort :: AbortParams -> Contract w s Text ()
+abort :: AbortParams -> Contract w s PerunError ()
 abort (AbortParams cId) = do
-  (oref, o, d@ChannelDatum {..}) <- findChannel cId
+  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync cId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
-  unless (all isLegalOutValue funding) . throwError . pack $ printf "Unable to abort channel with any funding below minimum Ada"
-  when funded . throwError . pack $ printf "can not abort funded channel"
+  -- TODO: This still gives the potential to lock a channel?
+  unless (all isLegalOutValue funding) . throwError $ InsufficientMinimumAdaBalanceError
+  when funded . throwError $ AlreadyFundedAbortError
   let r = Redeemer (PlutusTx.toBuiltinData Abort)
       lookups =
         Constraints.typedValidatorLookups (typedChannelValidator cId)
@@ -233,9 +231,9 @@ abort (AbortParams cId) = do
       (P.show funding)
 
 -- alternative way to open a channel "at once" with all funding in place
-open :: OpenParams -> Contract w s Text ()
+open :: OpenParams -> Contract w s PerunError ()
 open OpenParams {..} = do
-  unless (all isLegalOutValue spBalances) . throwError . pack $ printf "Unable to open channel with any balance below minimum Ada"
+  unless (all isLegalOutValue spBalances) . throwError $ InsufficientMinimumAdaBalanceError
   t <- currentTime
   let c =
         Channel
@@ -269,21 +267,15 @@ open OpenParams {..} = do
 -- dispute logic
 --
 
-dispute :: DisputeParams -> Contract w s Text ()
+dispute :: DisputeParams -> Contract w s PerunError ()
 dispute (DisputeParams keys sst) = do
   let dState = extractVerifiedState sst keys
   now <- currentTime
-  (oref, o, d@ChannelDatum {..}) <- findChannel $ channelId dState
+  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync $ channelId dState
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
-  unless (all isLegalOutValue (balances dState)) . throwError . pack $ printf "Unable to dispute channel with a state that contains any illegal balance (minAda)"
-  unless (isValidStateTransition state dState)
-    . throwError
-    . pack
-    $ printf "state transition in dispute invalid"
-  unless funded
-    . throwError
-    . pack
-    $ printf "can only dispute on funded state"
+  unless (all isLegalOutValue (balances dState)) . throwError $ InsufficientMinimumAdaBalanceError
+  unless (isValidStateTransition state dState) . throwError $ InvalidStateTransitionError
+  unless funded . throwError $ PrematureDisputeError
   let newDatum =
         d
           { state = dState,
@@ -320,25 +312,40 @@ dispute (DisputeParams keys sst) = do
         Constraints.mustPayToTheScript newDatum v
           <> Constraints.mustValidateIn range
           <> Constraints.mustSpendScriptOutput oref r
-  -- Wait one slot, otherwise we send the TX before the defined lower bound,
-  -- because `currentTime` returns the POSIXTime aligned to the current slot.
-  --  void $ waitNSlots 1
   ledgerTx <- submitTxConstraintsWith lookups tx
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
-  logInfo @P.String $ printf "made dispute of new state %s" (P.show dState)
+  logInfo @P.String $ printf "made dispute of new state with datum: %s" (P.show newDatum)
+
+retryAfterSync :: (AsContractError e) => Contract w s e a -> Contract w s e a
+retryAfterSync action = do
+  slot <- currentPABSlot
+  awaitChainIndexSlot slot
+  action
+
+awaitChainIndexSlot :: (AsContractError e) => Slot -> Contract w s e ()
+awaitChainIndexSlot targetSlot = do
+  chainIndexTip <- getTip
+  let chainIndexSlot = getChainIndexSlot chainIndexTip
+  when (chainIndexSlot < targetSlot) $ do
+    void $ waitNSlots 1
+    awaitChainIndexSlot targetSlot
+  where
+    getChainIndexSlot :: Tip -> Slot
+    getChainIndexSlot TipAtGenesis = Slot 0
+    getChainIndexSlot (Tip slot _ _) = slot
 
 --
 -- close channel
 --
 
-close :: CloseParams -> Contract w s Text ()
+close :: CloseParams -> Contract w s PerunError ()
 close params@(CloseParams keys sst) = do
   let s@ChannelState {..} = extractVerifiedState sst keys
-  (oref, o, d@ChannelDatum {..}) <- findChannel channelId
-  unless (all isLegalOutValue balances) . throwError . pack $ printf "Unable to close channel with any balance below minimum Ada"
-  unless (isValidStateTransition state s) . throwError . pack $ printf "state transition invalid"
-  unless final . throwError . pack $ printf "can not close unless state is final"
-  unless funded . throwError . pack $ printf "can only close funded state"
+  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync channelId
+  unless (all isLegalOutValue balances) . throwError $ InsufficientMinimumAdaBalanceError
+  unless (isValidStateTransition state s) . throwError $ InvalidStateTransitionError
+  unless final . throwError $ CloseOnNonFinalChannelError
+  unless funded . throwError $ CloseOnNonFundedChannelError
   let r = Redeemer . PlutusTx.toBuiltinData $ MkClose sst
       lookups =
         Constraints.typedValidatorLookups (typedChannelValidator channelId)
@@ -356,13 +363,13 @@ close params@(CloseParams keys sst) = do
       (P.show channelParameters)
       (P.show balances)
 
-forceClose :: ForceCloseParams -> Contract w s Text ()
+forceClose :: ForceCloseParams -> Contract w s PerunError ()
 forceClose (ForceCloseParams cId) = do
-  (oref, o, d@ChannelDatum {..}) <- findChannel cId
+  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync cId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
-  unless (all isLegalOutValue (balances state)) . throwError . pack $ printf "Unable to force-close channel with any balance below minimum Ada"
-  unless disputed . throwError . pack $ printf "channel was never in disputed state"
-  unless funded . throwError . pack $ printf "can only force-close funded state"
+  unless (all isLegalOutValue (balances state)) . throwError $ InsufficientMinimumAdaBalanceError
+  unless disputed . throwError $ ForceCloseOnNonDisputedChannelError
+  unless funded . throwError $ ForceCloseOnNonFundedChannelError
   let r = Redeemer (PlutusTx.toBuiltinData ForceClose)
       lookups =
         Constraints.typedValidatorLookups (typedChannelValidator cId)
@@ -385,20 +392,31 @@ forceClose (ForceCloseParams cId) = do
 earliestFirstCloseTime :: POSIXTime -> Integer -> POSIXTime
 earliestFirstCloseTime timeStamp timeLock = timeStamp + POSIXTime timeLock
 
+-- | findChannelWithSync is an optimistic findChannel handler. It first tries
+-- to find a channel and if not successful, retries it again AFTER making sure
+-- to synchronize with the chainindex to its current slot.
+findChannelWithSync :: ChannelID -> Contract w s PerunError (TxOutRef, ChainIndexTxOut, ChannelDatum)
+findChannelWithSync cid =
+  handleError errorHandler $ findChannel cid
+  where
+    errorHandler (FindChannelError _) = do
+      logWarn @P.String "Optimistic findChannel not succeeded. Trying again after syncing PAB with Chainindex."
+      retryAfterSync $ findChannel cid
+    errorHandler err = throwError err -- rethrow other errors.
+
 findChannel ::
   ChannelID ->
-  Contract w s Text (TxOutRef, ChainIndexTxOut, ChannelDatum)
+  Contract w s PerunError (TxOutRef, ChainIndexTxOut, ChannelDatum)
 findChannel cID = do
   utxos <- utxosAt $ channelAddress cID
   case Map.toList utxos of
-    -- TODO: revise this!
     [(oref, o)] -> case _ciTxOutScriptDatum o of
       (_, Just (Datum e)) -> case PlutusTx.fromBuiltinData e of
-        Nothing -> throwError "datum has wrong type"
+        Nothing -> throwError . FindChannelError $ WrongDatumTypeError
         Just d@ChannelDatum {} -> return (oref, o, d)
-      _ -> throwError "datum missing"
-    [] -> throwError "no utxo's found"
-    utxos -> throwError . pack $ printf "Too many UTXOs found: %d" (length utxos)
+      _otherwise -> throwError . FindChannelError $ DatumMissingError
+    [] -> throwError . FindChannelError $ NoUTXOsError
+    _utxos -> throwError . FindChannelError $ UnexpectedNumberOfUTXOsError
 
 addFunding :: Integer -> Integer -> [Integer] -> [Integer]
 addFunding amount index f =
@@ -408,8 +426,20 @@ addFunding amount index f =
 --
 -- Top-level contract, exposing all endpoints.
 --
-contract :: Contract () ChannelSchema Text ()
-contract = selectList [start', fund', abort', open', dispute', close', forceClose', dummy', dummyPayment'] >> contract
+contract :: Contract () ChannelSchema PerunError ()
+contract =
+  selectList
+    [ start',
+      fund',
+      abort',
+      open',
+      dispute',
+      close',
+      forceClose',
+      dummy',
+      dummyPayment'
+    ]
+    >> contract
   where
     start' = endpoint @"start" start
     fund' = endpoint @"fund" fund

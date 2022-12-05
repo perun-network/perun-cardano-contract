@@ -1,4 +1,5 @@
-{-#LANGUAGE TypeApplications#-}
+{-# LANGUAGE TypeApplications #-}
+
 module Main where
 
 import PAB (StarterContracts)

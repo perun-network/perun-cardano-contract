@@ -36,16 +36,13 @@ common shared
                     -fno-ignore-interface-pragmas
                     -fno-omit-interface-pragmas
                     -fobject-code
-                    -- Uncomment if there are build errors where `ghc`
-                    -- complains about "missing files in some package".
-                    -- If this helps, file a PR, thanks.
-                    --
-                    -- -dynamic
 
 executable perun-client
   import:           shared
   hs-source-dirs:   app/Client
   other-modules:    Websocket
+                    Client
+                    Multi
   build-depends:    perun-plutus
                     , plutus-contract
                     , plutus-pab
@@ -53,11 +50,12 @@ executable perun-client
                     , async
                     , aeson
                     , random
-                    , freer-simple
                     , prettyprinter
                     , bytestring
-                    , freer-extras
                     , plutus-ledger
+                    , containers
+                    , lens
+                    , mtl
                     , websockets
                     , data-default
                     , openapi3
@@ -65,14 +63,11 @@ executable perun-client
                     , servant-client-core
                     , http-client
                     , optparse-applicative
-                    , cardano-crypto
                     , cardano-wallet-core
                     , cardano-wallet
                     , cardano-api
-                    , cardano-addresses
                     , text
                     , text-class
-                    , http-conduit
                     , playground-common
   main-is:          Main.hs
 
@@ -83,9 +78,7 @@ executable perun-pab
                     , plutus-contract
                     , plutus-pab
                     , aeson
-                    , freer-simple
                     , prettyprinter
-                    , freer-extras
                     , plutus-ledger
                     , data-default
                     , openapi3
@@ -96,6 +89,7 @@ library
     exposed-modules: Perun
                    , Perun.Onchain
                    , Perun.Offchain
+                   , Perun.Error
                    , PAB
 
     -- Modules included in this library but not exported.
@@ -103,7 +97,7 @@ library
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
-    build-depends:      plutus-tx-plugin
+    build-depends:
                       , aeson
                       , bytestring
                       , cardano-api
@@ -113,13 +107,14 @@ library
                       , data-default
                       , plutus-contract
                       , plutus-ledger
+                      , plutus-tx-plugin
                       , plutus-ledger-api
                       , plutus-ledger-constraints
                       , plutus-script-utils
+                      , plutus-chain-index-core
                       , playground-common
                       , plutus-tx
                       , lens
-                      , serialise
                       , text
                       , openapi3
                       , plutus-pab
@@ -138,13 +133,10 @@ test-suite perun-plutus-test
                     , PerunPlutus.TestCases
                     , PerunPlutus.Test.EvilContract
   build-depends:      hspec
-                    , hspec-expectations
                     , QuickCheck -any
                     , tasty -any
                     , tasty-hunit -any
-                    , tasty-golden -any
                     , tasty-quickcheck -any
-                    , hspec-expectations-pretty-diff
                     , cardano-crypto
                     , perun-plutus
                     , plutus-contract
@@ -157,7 +149,4 @@ test-suite perun-plutus-test
                     , lens
                     , text
                     , extra
-                    , freer-simple
-                    , freer-extras
                     , bytestring
-  build-tool-depends: hspec-discover:hspec-discover == 2.*

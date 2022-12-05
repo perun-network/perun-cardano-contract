@@ -23,6 +23,7 @@ import Ledger
 import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
 import Perun hiding (abort, close, dispute, forceClose, fund, open, start)
+import Perun.Error
 import Plutus.Contract
 import qualified Plutus.V1.Ledger.Scripts as Scripts
 import qualified PlutusTx
@@ -102,7 +103,7 @@ type EvilSchema =
     .\/ Endpoint "close" EvilClose
     .\/ Endpoint "forceClose" EvilForceClose
 
-fund :: EvilFund -> Contract EvilContractState s Text ()
+fund :: EvilFund -> Contract EvilContractState s PerunError ()
 fund EvilFund {..} = do
   case efCase of
     FundSteal -> fundSteal efChannelId efFunderIdx
@@ -110,7 +111,7 @@ fund EvilFund {..} = do
     FundInvalidFunded -> fundInvalidFunded efChannelId
     FundAlreadyFunded -> fundAlreadyFunded efChannelId
 
-fundViolateChannelIntegrity :: ChannelID -> Contract EvilContractState s Text ()
+fundViolateChannelIntegrity :: ChannelID -> Contract EvilContractState s PerunError ()
 fundViolateChannelIntegrity cid = do
   (oref, o, d) <- findChannel cid
   logInfo @P.String $ printf "EVIL_CONTRACT: found channel utxo with datum %s" (P.show d)
@@ -125,7 +126,7 @@ fundViolateChannelIntegrity cid = do
 
 -- | fundInvalidFunded sends a funding transaction which does not add any
 -- additional funds to the channel but claims it is already funded.
-fundInvalidFunded :: ChannelID -> Contract EvilContractState s Text ()
+fundInvalidFunded :: ChannelID -> Contract EvilContractState s PerunError ()
 fundInvalidFunded cid = do
   (oref, o, d) <- findChannel cid
   logInfo @P.String $ printf "EVIL_CONTRACT: found channel utxo with datum %s" (P.show d)
@@ -136,11 +137,13 @@ fundInvalidFunded cid = do
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
   tell . Just . Semigroup.Last . getCardanoTxId $ ledgerTx
 
-fundAlreadyFunded :: ChannelID -> Contract EvilContractState s Text ()
+fundAlreadyFunded :: ChannelID -> Contract EvilContractState s PerunError ()
 fundAlreadyFunded cid = do
   (oref, o, d@ChannelDatum {..}) <- findChannel cid
   if not funded
-    then throwError "EVIL_CONTRACT: endpoint only works for already funded channels"
+    then
+      throwError . PerunContractError . OtherContractError $
+        "EVIL_CONTRACT: endpoint only works for already funded channels"
     else do
       logInfo @P.String $ printf "EVIL_CONTRACT: found channel utxo with datum %s" (P.show d)
       let newDatum = d
@@ -150,7 +153,7 @@ fundAlreadyFunded cid = do
       void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
       tell . Just . Semigroup.Last . getCardanoTxId $ ledgerTx
 
-fundSteal :: ChannelID -> Integer -> Contract EvilContractState s Text ()
+fundSteal :: ChannelID -> Integer -> Contract EvilContractState s PerunError ()
 fundSteal cid idx = do
   (oref, o, d@ChannelDatum {..}) <- findChannel cid
   logInfo @P.String $ printf "EVIL_CONTRACT: found channel utxo with datum %s" (P.show d)
@@ -173,13 +176,13 @@ dropIndex idx as = Just $ go idx 0 (as, [])
       | otherwise = go i (ci P.+ 1) (as, a : bs)
     go _ _ _ = P.error "impossible"
 
-abort :: EvilAbort -> Contract EvilContractState s Text ()
+abort :: EvilAbort -> Contract EvilContractState s PerunError ()
 abort (EvilAbort cid c) = case c of
   AbortInvalidFunding -> abortInvalidFunding cid
   AbortAlreadyFunded -> abortAlreadyFunded cid
   AbortUnrelatedParticipant -> abortUnrelatedParticipant cid
 
-abortInvalidFunding :: ChannelID -> Contract EvilContractState s Text ()
+abortInvalidFunding :: ChannelID -> Contract EvilContractState s PerunError ()
 abortInvalidFunding cid = do
   (oref, o, d) <- findChannel cid
   logInfo @P.String $ printf "EVIL_CONTRACT: found channel utxo with datum %s" (P.show d)
@@ -191,18 +194,18 @@ abortInvalidFunding cid = do
   tell . Just . Semigroup.Last . getCardanoTxId $ ledgerTx
   logInfo @P.String "EVIL_CONTRACT: executed malicious abort"
 
-abortAlreadyFunded :: ChannelID -> Contract EvilContractState s Text ()
+abortAlreadyFunded :: ChannelID -> Contract EvilContractState s PerunError ()
 abortAlreadyFunded = abortInvalidFunding
 
-abortUnrelatedParticipant :: ChannelID -> Contract EvilContractState s Text ()
+abortUnrelatedParticipant :: ChannelID -> Contract EvilContractState s PerunError ()
 abortUnrelatedParticipant = abortInvalidFunding
 
-close :: EvilClose -> Contract EvilContractState s Text ()
+close :: EvilClose -> Contract EvilContractState s PerunError ()
 close (EvilClose cid ss _pks bals c) = case c of
   CloseInvalidInputValue -> closeInvalidInputValue cid ss
   CloseUnfunded -> closeUnfunded cid ss bals
 
-closeUnfunded :: ChannelID -> SignedState -> [Integer] -> Contract EvilContractState s Text ()
+closeUnfunded :: ChannelID -> SignedState -> [Integer] -> Contract EvilContractState s PerunError ()
 closeUnfunded cid sst bals = do
   (oref, o, d@ChannelDatum {..}) <- findChannel cid
   logInfo @P.String $ printf "EVIL_CONTRACT: found channel utxo with datum %s" (P.show d)
@@ -215,7 +218,7 @@ closeUnfunded cid sst bals = do
   tell . Just . Semigroup.Last . getCardanoTxId $ ledgerTx
   logInfo @P.String "EVIL_CONTRACT: executed malicious close"
 
-closeInvalidInputValue :: ChannelID -> SignedState -> Contract EvilContractState s Text ()
+closeInvalidInputValue :: ChannelID -> SignedState -> Contract EvilContractState s PerunError ()
 closeInvalidInputValue cid sst = do
   (oref, o, d) <- findChannel cid
   logInfo @P.String $ printf "EVIL_CONTRACT: found channel utxo with datum %s" (P.show d)
@@ -227,12 +230,12 @@ closeInvalidInputValue cid sst = do
   tell . Just . Semigroup.Last . getCardanoTxId $ ledgerTx
   logInfo @P.String "EVIL_CONTRACT: executed malicious close"
 
-forceClose :: EvilForceClose -> Contract EvilContractState s Text ()
+forceClose :: EvilForceClose -> Contract EvilContractState s PerunError ()
 forceClose (EvilForceClose cid c) = case c of
   ForceCloseInvalidInput -> forceCloseInvalidInput cid
   ForceCloseValidInput -> forceCloseValidInput cid
 
-forceCloseInvalidInput :: ChannelID -> Contract EvilContractState s Text ()
+forceCloseInvalidInput :: ChannelID -> Contract EvilContractState s PerunError ()
 forceCloseInvalidInput cid = do
   (oref, o, d) <- findChannel cid
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
@@ -244,7 +247,7 @@ forceCloseInvalidInput cid = do
   tell . Just . Semigroup.Last . getCardanoTxId $ ledgerTx
   logInfo @P.String "EVIL_CONTRACT: executed malicious force close"
 
-forceCloseValidInput :: ChannelID -> Contract EvilContractState s Text ()
+forceCloseValidInput :: ChannelID -> Contract EvilContractState s PerunError ()
 forceCloseValidInput cid = do
   (oref, o, d@ChannelDatum {..}) <- findChannel cid
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
@@ -262,18 +265,18 @@ forceCloseValidInput cid = do
   tell . Just . Semigroup.Last . getCardanoTxId $ ledgerTx
   logInfo @P.String "EVIL_CONTRACT: executed malicious force close"
 
-dispute :: EvilDispute -> Contract EvilContractState s Text ()
+dispute :: EvilDispute -> Contract EvilContractState s PerunError ()
 dispute EvilDispute {..} = case edCase of
   DisputeInvalidInput -> disputeInvalidInput edChannelId edSignedState
   DisputeValidInput -> disputeValidInput edChannelId edSignedState edSigningPKs
   DisputeWrongState -> disputeWrongState edChannelId edSignedState
 
-disputeWrongState :: ChannelID -> SignedState -> Contract EvilContractState s Text ()
+disputeWrongState :: ChannelID -> SignedState -> Contract EvilContractState s PerunError ()
 disputeWrongState cid sst = do
   (oref, o, d) <- findChannel cid
   disputeWithDatum oref o cid sst $ d {state = ChannelState 99 [] 0 False}
 
-disputeValidInput :: ChannelID -> SignedState -> [PaymentPubKey] -> Contract EvilContractState s Text ()
+disputeValidInput :: ChannelID -> SignedState -> [PaymentPubKey] -> Contract EvilContractState s PerunError ()
 disputeValidInput cid sst keys = do
   let dState = extractVerifiedState sst keys
   t <- currentTime
@@ -281,7 +284,7 @@ disputeValidInput cid sst keys = do
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   disputeWithDatum oref o cid sst d {state = dState, time = t, disputed = True}
 
-disputeWithDatum :: TxOutRef -> ChainIndexTxOut -> ChannelID -> SignedState -> ChannelDatum -> Contract EvilContractState s Text ()
+disputeWithDatum :: TxOutRef -> ChainIndexTxOut -> ChannelID -> SignedState -> ChannelDatum -> Contract EvilContractState s PerunError ()
 disputeWithDatum oref o cid sst dat = do
   let newDatum = dat
       r = Scripts.Redeemer . PlutusTx.toBuiltinData . MkDispute $ sst
@@ -291,7 +294,7 @@ disputeWithDatum oref o cid sst dat = do
   tell . Just . Semigroup.Last . getCardanoTxId $ ledgerTx
   logInfo @P.String "EVIL_CONTRACT: executed malicious dispute"
 
-disputeInvalidInput :: ChannelID -> SignedState -> Contract EvilContractState s Text ()
+disputeInvalidInput :: ChannelID -> SignedState -> Contract EvilContractState s PerunError ()
 disputeInvalidInput cid sst = do
   (oref, o, d) <- findChannel cid
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
@@ -306,7 +309,7 @@ disputeInvalidInput cid sst = do
 --
 -- Top-level contract, exposing all endpoints.
 --
-evilContract :: Contract EvilContractState EvilSchema Text ()
+evilContract :: Contract EvilContractState EvilSchema PerunError ()
 evilContract = selectList [fund', abort', dispute', close', forceClose'] >> evilContract
   where
     fund' = endpoint @"fund" fund
