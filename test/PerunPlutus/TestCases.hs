@@ -4,6 +4,7 @@
 
 module PerunPlutus.TestCases (perunTests) where
 
+import Control.Lens hiding (both)
 import Data.Tuple.Extra
 import Perun hiding (ChannelAction (..))
 import PerunPlutus.PerunSpec
@@ -11,7 +12,6 @@ import PerunPlutus.Test.EvilContract
 import Plutus.Contract.Test
 import Plutus.Contract.Test.ContractModel
 import Test.QuickCheck
-import Test.QuickCheck (Property)
 import Test.Tasty (TestTree)
 import Test.Tasty.QuickCheck
 
@@ -38,7 +38,7 @@ samePartySameValuePayoutTest (wa, wf) = do
   channelID <- forAllQ arbitraryQ
   action $ Open wf [wa, wa] channelID [minAda, minAda] defaultTimeLock
   action Finalize
-  (ChannelState cid _ _ _, _, _, _) <- requireGetChannel "channel must be available after finalization"
+  ChannelState cid _ _ _ <- (^. chanState) <$> requireGetChannel "channel must be available after finalization"
   action $ Close wa [wa, wa] cid
 
 -- | sameValuePayoutTest checks that the payout validation works if there are
@@ -48,7 +48,7 @@ sameValuePayoutTest (wa, wb, wf) = do
   channelID <- forAllQ arbitraryQ
   action $ Open wf [wa, wb] channelID [minAda, minAda] defaultTimeLock
   action Finalize
-  (ChannelState cid _ _ _, _, _, _) <- requireGetChannel "channel must be available after finalization"
+  ChannelState cid _ _ _ <- (^. chanState) <$> requireGetChannel "channel must be available after finalization"
   action $ Close wb [wa, wb] cid
 
 -- | honestPaymentTest test scenario:
@@ -63,10 +63,10 @@ honestPaymentTest (wa, wb, wf) = do
   modChSt <-
     requireWithChannel
       "channel must be available after opening"
-      (\(cs, _, _, _) -> forAllQ (chooseQ (0, initBalA - minAda)) >>= aPaysB cs)
+      (\(PerunModelState cs _ _ _ _) -> forAllQ (chooseQ (0, initBalA - minAda)) >>= aPaysB cs)
   action $ Update modChSt
   action Finalize
-  (ChannelState cid _ _ _, _, _, _) <- requireGetChannel "channel must be available after finalization"
+  ChannelState cid _ _ _ <- (^. chanState) <$> requireGetChannel "channel must be available after finalization"
   action $ Close wb [wa, wb] cid
 
 -- | singleDisputeTest test scenario:
@@ -85,7 +85,7 @@ singleDisputeTest (wa, wb, wf) = do
   modChSt <-
     requireWithChannel
       "channel must be available after opening"
-      (\(cs, _, _, _) -> forAllQ (chooseQ (0, initBalA - minAda)) >>= aPaysB cs)
+      (\(PerunModelState cs _ _ _ _) -> forAllQ (chooseQ (0, initBalA - minAda)) >>= aPaysB cs)
   action $ Update modChSt
   action $ Dispute wb [wa, wb] channelID modChSt
   action $ Wait defaultTimeLockSlots
@@ -97,7 +97,7 @@ singleDisputeTest (wa, wb, wf) = do
 -- | A issues another payment to B (-> State 2),
 -- | A maliciously disputes with the outdated State 1
 -- | (where A still has more money),
--- | A disputes with the newer (newest) State 2,
+-- | B disputes with the newer (newest) State 2,
 -- | A can not dispute with a newer signed state,
 -- | B force-closes the channel after waiting for the timelock to expire
 maliciousDisputeTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
@@ -107,20 +107,21 @@ maliciousDisputeTest (wa, wb, wf) = do
   action $ Open wf [wa, wb] channelID [initBalA, initBalB] defaultTimeLock
   firstUpdate <-
     requireGetChannel "channel must be available after opening"
-      >>= ( \(cs, _, _, _) ->
+      >>= ( \(PerunModelState cs _ _ _ _) ->
               forAllQ (chooseQ (0, (initBalA - minAda) `div` 2))
                 >>= aPaysB cs
           )
   action $ Update firstUpdate
   secondUpdate <-
     requireGetChannel "channel must be available after opening"
-      >>= ( \(cs, _, _, _) ->
+      >>= ( \(PerunModelState cs _ _ _ _) ->
               forAllQ (chooseQ (0, (initBalA - minAda) `div` 2))
                 >>= aPaysB cs
           )
   action $ Update secondUpdate
 
   action $ Dispute wa [wa, wb] channelID firstUpdate
+  action $ Wait 1
   action $ Dispute wb [wa, wb] channelID secondUpdate
 
   action $ Wait defaultTimeLockSlots
@@ -141,10 +142,10 @@ twoPartyFundingAndPaymentTest (wa, wb) = do
   modChSt <-
     requireWithChannel
       "channel must be available after opening"
-      (\(cs, _, _, _) -> forAllQ (chooseQ (0, initBalA - minAda)) >>= aPaysB cs)
+      (\(PerunModelState cs _ _ _ _) -> forAllQ (chooseQ (0, initBalA - minAda)) >>= aPaysB cs)
   action $ Update modChSt
   action Finalize
-  (ChannelState cid _ _ _, _, _, _) <- requireGetChannel "channel must be available after finalization"
+  ChannelState cid _ _ _ <- (^. chanState) <$> requireGetChannel "channel must be available after finalization"
   action $ Close wb [wa, wb] cid
 
 -- | twoPartyFundingAndPaymentTest test scenario:
@@ -164,7 +165,7 @@ threePartyFundingAndPaymentTest (wa, wb, wc) = do
   modChSt <-
     requireWithChannel
       "channel must be available after opening"
-      (\(cs, _, _, _) -> forAllQ (chooseQ (0, initBalA - minAda)) >>= aPaysB cs)
+      (\(PerunModelState cs _ _ _ _) -> forAllQ (chooseQ (0, initBalA - minAda)) >>= aPaysB cs)
   action $ Update modChSt
   action Finalize
   action $ Close wb [wa, wb, wc] channelID
@@ -225,18 +226,18 @@ maliciousWalletTest (wa, wb, wc) = do
   modChSt <-
     requireWithChannel
       "channel must be available after opening"
-      (\(cs, _, _, _) -> forAllQ (chooseQ (0, initBalA - minAda)) >>= aPaysB cs)
+      (\(PerunModelState cs _ _ _ _) -> forAllQ (chooseQ (0, initBalA - minAda)) >>= aPaysB cs)
   action $ Update modChSt
   action Finalize
   action $ Close wa [wa, wb] channelID
 
-requireGetChannel :: String -> DL PerunModel (ChannelState, Integer, [Integer], Bool)
+requireGetChannel :: String -> DL PerunModel PerunModelState
 requireGetChannel msg =
   getContractState >>= \case
-    PerunModel Nothing -> fail $ "PerunModel must contain active channel: " <> msg
-    PerunModel (Just c) -> return c
+    Nothing -> fail $ "PerunModel must contain active channel: " <> msg
+    (Just pms) -> return pms
 
-requireWithChannel :: String -> ((ChannelState, Integer, [Integer], Bool) -> DL PerunModel a) -> DL PerunModel a
+requireWithChannel :: String -> (PerunModelState -> DL PerunModel a) -> DL PerunModel a
 requireWithChannel msg f = requireGetChannel msg >>= f
 
 aPaysB :: ChannelState -> Integer -> DL PerunModel ChannelState

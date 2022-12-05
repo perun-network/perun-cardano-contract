@@ -10,6 +10,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -44,15 +45,53 @@ where
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Data
 import GHC.Generics (Generic)
-import Ledger hiding (singleton)
+import Ledger
+  ( Address,
+    DiffMilliSeconds (..),
+    Extended (..),
+    Interval (..),
+    LowerBound (..),
+    POSIXTime,
+    PaymentPubKey (..),
+    PaymentPubKeyHash (..),
+    Signature,
+    UpperBound (..),
+    Value,
+    contains,
+    from,
+    fromMilliSeconds,
+    member,
+    minAdaTxOut,
+    strictLowerBound,
+    strictUpperBound,
+    toPubKeyHash,
+  )
 import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
-import qualified Ledger.Typed.Scripts as Scripts
+import Ledger.Scripts hiding (version)
+-- import qualified Ledger.Typed.Scripts as Scripts
+import Ledger.Scripts.Orphans ()
 import Ledger.Value (geq)
 import Playground.Contract (ensureKnownCurrencies, printJson, printSchemas, stage)
 import Plutus.Contract.Oracle (SignedMessage, verifySignedMessageConstraints)
+import Plutus.Script.Utils.V2.Address (mkValidatorAddress)
+import qualified Plutus.Script.Utils.V2.Scripts as Scripts
+import qualified Plutus.Script.Utils.V2.Typed.Scripts as Scripts hiding (validatorHash)
+import Plutus.V2.Ledger.Contexts
+  ( ScriptContext (..),
+    TxInInfo (..),
+    TxInfo (..),
+    TxOut (..),
+    findDatum,
+    getContinuingOutputs,
+    txSignedBy,
+  )
+import Plutus.V2.Ledger.Tx
+  ( OutputDatum (..),
+  )
 import qualified PlutusTx
 import PlutusTx.Prelude hiding (unless)
+import Schema (FormSchema (..), ToSchema (..))
 import qualified Prelude as P
 
 --
@@ -91,7 +130,7 @@ data ChannelState = ChannelState
     version :: !Integer,
     final :: !Bool
   }
-  deriving (Data, Generic, ToJSON, FromJSON)
+  deriving (Data, Generic, ToJSON, FromJSON, ToSchema)
   deriving stock (P.Eq, P.Show)
 
 instance Eq ChannelState where
@@ -116,11 +155,14 @@ instance Eq SignedState where
   {-# INLINEABLE (==) #-}
   a == b = stateSigs a == stateSigs b
 
+instance ToSchema SignedState where
+  toSchema = FormSchemaArray (toSchema @(Signature, (DatumHash, ChannelState)))
+
 PlutusTx.unstableMakeIsData ''SignedState
 PlutusTx.makeLift ''SignedState
 
 -- Redeemer Datatype
-data ChannelAction = Fund | Abort | MkDispute SignedState | MkClose SignedState | ForceClose
+data ChannelAction = Fund | Abort | MkDispute !SignedState | MkClose !SignedState | ForceClose
   deriving (P.Show, Generic, ToJSON, FromJSON)
 
 PlutusTx.unstableMakeIsData ''ChannelAction
@@ -130,7 +172,7 @@ PlutusTx.makeLift ''ChannelAction
 data ChannelDatum = ChannelDatum
   { channelParameters :: !Channel,
     state :: !ChannelState,
-    time :: !Ledger.POSIXTime,
+    time :: !POSIXTime,
     funding :: ![Integer],
     funded :: !Bool,
     disputed :: !Bool
@@ -295,13 +337,13 @@ mkChannelValidator cID oldDatum action ctx =
 
     input :: TxInInfo
     input =
-      let isScriptInput i = case (txOutDatumHash . txInInfoResolved) i of
-            Nothing -> False
-            Just _ -> True
+      let isScriptInput i = case (txOutDatum . txInInfoResolved) i of
+            NoOutputDatum -> False
+            _otherwise -> True
           xs = [i | i <- txInfoInputs info, isScriptInput i]
        in case xs of
             [i] -> i
-            _ -> traceError "expected exactly one script input"
+            _otherwise -> traceError "expected exactly one script input"
 
     inVal :: Value
     inVal = txOutValue . txInInfoResolved $ input
@@ -315,17 +357,21 @@ mkChannelValidator cID oldDatum action ctx =
     correctInputFunding :: Bool
     correctInputFunding = inVal == Ada.lovelaceValueOf (sum $ funding oldDatum)
 
+    resolveDatumTarget :: TxOut -> BuiltinData -> (TxOut, ChannelDatum)
+    resolveDatumTarget o d = case PlutusTx.fromBuiltinData d of
+      Just ad' -> (o, ad')
+      Nothing -> traceError "error decoding data"
+
     ownOutput :: TxOut
     outputDatum :: ChannelDatum
     (ownOutput, outputDatum) = case getContinuingOutputs ctx of
-      [o] -> case txOutDatumHash o of
-        Nothing -> traceError "wrong output type"
-        Just h -> case findDatum h info of
+      [o] -> case txOutDatum o of
+        NoOutputDatum -> traceError "wrong output type"
+        OutputDatum (Datum d) -> resolveDatumTarget o d
+        OutputDatumHash h -> case findDatum h info of
           Nothing -> traceError "datum not found"
-          Just (Datum d) -> case PlutusTx.fromBuiltinData d of
-            Just ad' -> (o, ad')
-            Nothing -> traceError "error decoding data"
-      _ -> traceError "expected exactly one continuing output"
+          Just (Datum d) -> resolveDatumTarget o d
+      _otherwise -> traceError "expected exactly one continuing output"
 
     channelIntegrityAtFunding :: Bool
     channelIntegrityAtFunding =
@@ -397,18 +443,18 @@ mkChannelValidator cID oldDatum action ctx =
 --
 
 typedChannelValidator :: ChannelID -> Scripts.TypedValidator ChannelTypes
-typedChannelValidator cID =
-  Scripts.mkTypedValidator @ChannelTypes
-    ($$(PlutusTx.compile [||mkChannelValidator||]) `PlutusTx.applyCode` PlutusTx.liftCode cID)
+typedChannelValidator =
+  Scripts.mkTypedValidatorParam @ChannelTypes @ChannelID
+    $$(PlutusTx.compile [||mkChannelValidator||])
     $$(PlutusTx.compile [||wrap||])
   where
-    wrap = Scripts.wrapValidator @ChannelDatum @ChannelAction
+    wrap = Scripts.mkUntypedValidator @ChannelDatum @ChannelAction
 
 channelValidator :: ChannelID -> Validator
 channelValidator = Scripts.validatorScript . typedChannelValidator
 
-channelHash :: ChannelID -> Ledger.ValidatorHash
-channelHash = Scripts.validatorHash . typedChannelValidator
+channelHash :: ChannelID -> ValidatorHash
+channelHash = Scripts.validatorHash . channelValidator
 
-channelAddress :: ChannelID -> Ledger.Address
-channelAddress = scriptHashAddress . channelHash
+channelAddress :: ChannelID -> Address
+channelAddress = mkValidatorAddress . channelValidator
