@@ -177,7 +177,7 @@ start OpenParams {..} = do
 
 fund :: FundParams -> Contract w s PerunError ()
 fund FundParams {..} = do
-  (oref, o, d@ChannelDatum {..}) <- findChannel fpChannelId
+  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync fpChannelId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   -- TODO add more checks before funding
   unless (all isLegalOutValue (balances state)) . throwError $ InsufficientMinimumAdaBalanceError
@@ -208,7 +208,7 @@ fund FundParams {..} = do
 
 abort :: AbortParams -> Contract w s PerunError ()
 abort (AbortParams cId) = do
-  (oref, o, d@ChannelDatum {..}) <- findChannel cId
+  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync cId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   -- TODO: This still gives the potential to lock a channel?
   unless (all isLegalOutValue funding) . throwError $ InsufficientMinimumAdaBalanceError
@@ -271,7 +271,7 @@ dispute :: DisputeParams -> Contract w s PerunError ()
 dispute (DisputeParams keys sst) = do
   let dState = extractVerifiedState sst keys
   now <- currentTime
-  (oref, o, d@ChannelDatum {..}) <- findChannel $ channelId dState
+  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync $ channelId dState
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   unless (all isLegalOutValue (balances dState)) . throwError $ InsufficientMinimumAdaBalanceError
   unless (isValidStateTransition state dState) . throwError $ InvalidStateTransitionError
@@ -341,7 +341,7 @@ awaitChainIndexSlot targetSlot = do
 close :: CloseParams -> Contract w s PerunError ()
 close params@(CloseParams keys sst) = do
   let s@ChannelState {..} = extractVerifiedState sst keys
-  (oref, o, d@ChannelDatum {..}) <- findChannel channelId
+  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync channelId
   unless (all isLegalOutValue balances) . throwError $ InsufficientMinimumAdaBalanceError
   unless (isValidStateTransition state s) . throwError $ InvalidStateTransitionError
   unless final . throwError $ CloseOnNonFinalChannelError
@@ -365,7 +365,7 @@ close params@(CloseParams keys sst) = do
 
 forceClose :: ForceCloseParams -> Contract w s PerunError ()
 forceClose (ForceCloseParams cId) = do
-  (oref, o, d@ChannelDatum {..}) <- findChannel cId
+  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync cId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   unless (all isLegalOutValue (balances state)) . throwError $ InsufficientMinimumAdaBalanceError
   unless disputed . throwError $ ForceCloseOnNonDisputedChannelError
