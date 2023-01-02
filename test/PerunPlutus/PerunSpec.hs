@@ -80,22 +80,22 @@ instance ContractModel PerunModel where
   --}
   data Action PerunModel
     = -- Start the channel (with insufficient funding)
-      -- Participants ChanelID Balances Timeloc
-      Start [Wallet] Integer [Integer] Integer
+      -- Participants ChanelID Balances Timelock Nonce
+      Start [Wallet] ChannelID [Integer] Integer Integer
     | -- Fund the channel
       -- Funder Index ChannelID
-      Fund Wallet Integer Integer
+      Fund Wallet Integer ChannelID
     | -- Abort the channel
       -- Issuer wallets ChannelID
-      Abort Wallet [Wallet] Integer
-    | -- Open Issuer Participants ChannelID Balances Timelock.
-      Open Wallet [Wallet] Integer [Integer] Integer
+      Abort Wallet [Wallet] ChannelID
+    | -- Open Issuer Participants ChannelID Balances Timelock Nonce
+      Open Wallet [Wallet] ChannelID [Integer] Integer Integer
     | -- Close Issuer Participants ChannelId.
-      Close Wallet [Wallet] Integer
+      Close Wallet [Wallet] ChannelID
     | -- ForceClose Issuer Participants ChannelID.
-      ForceClose Wallet [Wallet] Integer
+      ForceClose Wallet [Wallet] ChannelID
     | -- Dispute -> Issuer Participants ChannelId ProposedState
-      Dispute Wallet [Wallet] Integer ChannelState
+      Dispute Wallet [Wallet] ChannelID ChannelState
     | -- Update
       Update ChannelState
     | -- Finalize: sets the final bit in the state
@@ -139,7 +139,7 @@ instance ContractModel PerunModel where
   -- channel.
   -- Furthermore the `Contract` managing the funds has to know that it holds
   -- the balances for each wallet.
-  nextState (Start parties cid startBalances timeLock) = do
+  nextState (Start parties cid startBalances timeLock _) = do
     modifyContractState $ \_ ->
       Just $
         PerunModelState
@@ -185,7 +185,7 @@ instance ContractModel PerunModel where
 
     zipWithM_ deposit parties (map Ada.lovelaceValueOf curFunding)
     wait 1
-  nextState (Open funder _ cid openBalances timeLock) = do
+  nextState (Open funder _ cid openBalances timeLock _) = do
     modifyContractState $ \_ ->
       Just $
         PerunModelState
@@ -252,7 +252,7 @@ instance ContractModel PerunModel where
   nextState (MaliciousDispute n _ _ _ _ _) = invariant >> wait n
 
   perform handle _ s cmd = case cmd of
-    Start parties cid startBalances timeLock -> do
+    Start parties cid startBalances timeLock nonce -> do
       Trace.callEndpoint @"start"
         (handle $ Participant (head parties))
         ( OpenParams
@@ -261,6 +261,7 @@ instance ContractModel PerunModel where
             (map mockWalletPaymentPubKeyHash parties)
             startBalances
             timeLock
+            nonce
         )
       delay 1
     Fund funder idx cid -> do
@@ -273,7 +274,7 @@ instance ContractModel PerunModel where
         (handle $ Participant issuer)
         (AbortParams cid)
       delay 1
-    Open wf parties cid bals timelock -> do
+    Open wf parties cid bals timelock nonce -> do
       Trace.callEndpoint @"open"
         (handle $ Participant wf)
         ( OpenParams
@@ -282,6 +283,7 @@ instance ContractModel PerunModel where
             (map mockWalletPaymentPubKeyHash parties)
             bals
             timelock
+            nonce
         )
       delay 1
     Update {} -> do
@@ -326,7 +328,7 @@ instance ContractModel PerunModel where
         Nothing -> Trace.throwError . Trace.GenericError $ "no channel to close"
         Just pms -> return $ pms ^. chanState
       (_, pks, _) <- verifiedSignedStateAndKeys parties chan
-      requireInvalidTxEndpoint @"close" (handle $ Adversary w) (EvilClose cID (SignedState [signMessage' (ChannelState 0 [0] 0 False) sk]) pks bals c) "malicious closing should not work"
+      requireInvalidTxEndpoint @"close" (handle $ Adversary w) (EvilClose cID (SignedState [signMessage' (ChannelState (ChannelID "abc") [0] 0 False) sk]) pks bals c) "malicious closing should not work"
     MaliciousForceClose _ w cid c -> do
       requireInvalidTxEndpoint @"forceClose" (handle $ Adversary w) (EvilForceClose cid c) "malicious forceClose should not work"
     MaliciousDispute _ w cid parties bals c -> do

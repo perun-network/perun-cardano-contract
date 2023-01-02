@@ -18,21 +18,25 @@
 module Perun.Offchain where
 
 import Control.Monad hiding (fmap)
-import Data.Aeson (FromJSON, ToJSON)
+import Data.Aeson (FromJSON, ToJSON, encode)
 import Data.List (genericSplitAt)
 import Data.Map as Map hiding (drop, map)
+import Data.Text (Text, unpack)
 import GHC.Generics (Generic)
 import Ledger hiding (singleton)
 import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
 import Ledger.Constraints.OffChain ()
+import qualified Ledger.Scripts as S
 import Perun.Error
 import Perun.Onchain
 import Plutus.ChainIndex.Types hiding (ChainIndexTxOut)
 import Plutus.Contract
+import Plutus.V2.Ledger.Api (BuiltinByteString, ToData (toBuiltinData))
 import qualified PlutusTx
 import PlutusTx.Prelude hiding (unless)
 import Schema (ToSchema)
+import Text.Hex (encodeHex)
 import Text.Printf (printf)
 import qualified Prelude as P
 
@@ -51,7 +55,8 @@ data OpenParams = OpenParams
     spSigningPKs :: ![PaymentPubKey],
     spPaymentPKs :: ![PaymentPubKeyHash],
     spBalances :: ![Integer],
-    spTimeLock :: !Integer
+    spTimeLock :: !Integer,
+    spNonce :: !Integer
   }
   deriving (Generic, ToJSON, FromJSON, ToSchema)
   deriving stock (P.Eq, P.Show)
@@ -95,17 +100,18 @@ type ChannelSchema =
     .\/ Endpoint "dispute" DisputeParams
     .\/ Endpoint "close" CloseParams
     .\/ Endpoint "forceClose" ForceCloseParams
-    .\/ Endpoint "dummy" Integer
+    .\/ Endpoint "dummy" ChannelID
     .\/ Endpoint "dummyPayment" PaymentPubKeyHash
 
-dummy :: Integer -> Contract w s PerunError ()
+dummy :: ChannelID -> Contract w s PerunError ()
 dummy cid = do
   logInfo @P.String $ printf "Dummy: Started dummy endpoint"
   let c =
         Channel
           { pTimeLock = 1,
             pSigningPKs = [],
-            pPaymentPKs = []
+            pPaymentPKs = [],
+            pNonce = 0
           }
       s =
         ChannelState
@@ -151,7 +157,8 @@ start OpenParams {..} = do
         Channel
           { pTimeLock = spTimeLock,
             pSigningPKs = spSigningPKs,
-            pPaymentPKs = spPaymentPKs
+            pPaymentPKs = spPaymentPKs,
+            pNonce = spNonce
           }
       s =
         ChannelState
@@ -173,7 +180,7 @@ start OpenParams {..} = do
       tx = Constraints.mustPayToTheScript d v
   ledgerTx <- submitTxConstraints (typedChannelValidator spChannelId) tx
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
-  logInfo @P.String $ printf "Started funding for channel %d with parameters %s and value %s" spChannelId (P.show c) (P.show v)
+  logInfo @P.String $ printf "Started funding for channel %s with parameters %s and value %s" (P.show spChannelId) (P.show c) (P.show v)
 
 fund :: FundParams -> Contract w s PerunError ()
 fund FundParams {..} = do
@@ -204,7 +211,7 @@ fund FundParams {..} = do
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   -- TODO avoid using list-indexing with !!
   --      try to use fixed-sized arrays instead
-  logInfo @P.String $ printf "Funded %d Lovelace for party %d on channel %d" (balances state !! fpIndex) fpIndex fpChannelId
+  logInfo @P.String $ printf "Funded %d Lovelace for party %d on channel %s" (balances state !! fpIndex) fpIndex (P.show fpChannelId)
 
 abort :: AbortParams -> Contract w s PerunError ()
 abort (AbortParams cId) = do
@@ -225,8 +232,8 @@ abort (AbortParams cId) = do
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $
     printf
-      "aborted channel %d with parameters %s. The funding was: %s"
-      cId
+      "aborted channel %s with parameters %s. The funding was: %s"
+      (P.show cId)
       (P.show channelParameters)
       (P.show funding)
 
@@ -239,7 +246,8 @@ open OpenParams {..} = do
         Channel
           { pTimeLock = spTimeLock,
             pSigningPKs = spSigningPKs,
-            pPaymentPKs = spPaymentPKs
+            pPaymentPKs = spPaymentPKs,
+            pNonce = spNonce
           }
       s =
         ChannelState
@@ -261,7 +269,7 @@ open OpenParams {..} = do
       tx = Constraints.mustPayToTheScript d v
   ledgerTx <- submitTxConstraints (typedChannelValidator spChannelId) tx
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
-  logInfo @P.String $ printf "Opened channel %d with parameters %s and value %s" spChannelId (P.show c) (P.show v)
+  logInfo @P.String $ printf "Opened channel %s with parameters %s and value %s" (P.show spChannelId) (P.show c) (P.show v)
 
 --
 -- dispute logic
@@ -358,8 +366,8 @@ close params@(CloseParams keys sst) = do
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $
     printf
-      "closed channel %d with params %s. The final balances are: %s"
-      channelId
+      "closed channel %s with params %s. The final balances are: %s"
+      (P.show channelId)
       (P.show channelParameters)
       (P.show balances)
 
@@ -383,8 +391,8 @@ forceClose (ForceCloseParams cId) = do
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $
     printf
-      "force closed channel %d with parameters %s. The final balances are: %s"
-      cId
+      "force closed channel %s with parameters %s. The final balances are: %s"
+      (P.show cId)
       (P.show channelParameters)
       (P.show $ balances state)
 
@@ -403,6 +411,9 @@ findChannelWithSync cid =
       logWarn @P.String "Optimistic findChannel not succeeded. Trying again after syncing PAB with Chainindex."
       retryAfterSync $ findChannel cid
     errorHandler err = throwError err -- rethrow other errors.
+
+getChannelId :: Channel -> ChannelID
+getChannelId channel = ChannelID . S.dataHash $ toBuiltinData channel
 
 findChannel ::
   ChannelID ->
