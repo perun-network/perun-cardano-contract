@@ -2,7 +2,7 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
@@ -15,6 +15,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module Perun.Onchain
@@ -24,7 +25,7 @@ module Perun.Onchain
     ChannelAction (..),
     ChannelDatum (..),
     ChannelTypes,
-    ChannelID,
+    ChannelID (..),
     minAda,
     isLegalOutValue,
     ensureKnownCurrencies,
@@ -44,6 +45,9 @@ where
 
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Data
+-- import qualified Ledger.Typed.Scripts as Scripts
+
+import Data.Text (unpack)
 import GHC.Generics (Generic)
 import Ledger
   ( Address,
@@ -69,7 +73,6 @@ import Ledger
 import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
 import Ledger.Scripts hiding (version)
--- import qualified Ledger.Typed.Scripts as Scripts
 import Ledger.Scripts.Orphans ()
 import Ledger.Value (geq)
 import Playground.Contract (ensureKnownCurrencies, printJson, printSchemas, stage)
@@ -92,6 +95,7 @@ import Plutus.V2.Ledger.Tx
 import qualified PlutusTx
 import PlutusTx.Prelude hiding (unless)
 import Schema (FormSchema (..), ToSchema (..))
+import Text.Hex (encodeHex)
 import qualified Prelude as P
 
 --
@@ -103,13 +107,22 @@ import qualified Prelude as P
 minAda :: Integer
 minAda = getLovelace minAdaTxOut
 
-type ChannelID = Integer
+newtype ChannelID = ChannelID BuiltinByteString
+  deriving (ToJSON, FromJSON, ToSchema, Eq, P.Eq) via BuiltinByteString
+  deriving (Generic, Data)
+
+PlutusTx.unstableMakeIsData ''ChannelID
+PlutusTx.makeLift ''ChannelID
+
+instance P.Show ChannelID where
+  show (ChannelID cid) = unpack . encodeHex $ fromBuiltin cid
 
 -- Parameters of the channel
 data Channel = Channel
   { pTimeLock :: !Integer,
     pSigningPKs :: ![PaymentPubKey],
-    pPaymentPKs :: ![PaymentPubKeyHash]
+    pPaymentPKs :: ![PaymentPubKeyHash],
+    pNonce :: !Integer
   }
   deriving (P.Show, Generic, ToJSON, FromJSON)
 
@@ -120,12 +133,13 @@ instance Eq Channel where
     pTimeLock a == pTimeLock b
       && pSigningPKs a == pSigningPKs b
       && pPaymentPKs a == pPaymentPKs b
+      && pNonce a == pNonce b
 
 PlutusTx.unstableMakeIsData ''Channel
 PlutusTx.makeLift ''Channel
 
 data ChannelState = ChannelState
-  { channelId :: !ChannelID,
+  { channelId :: ChannelID,
     balances :: ![Integer],
     version :: !Integer,
     final :: !Bool

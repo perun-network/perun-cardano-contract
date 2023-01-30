@@ -27,8 +27,8 @@ import Multi
 import Options.Applicative hiding (Success)
 import Options.Applicative.Types
 import Perun (DisputeParams (..), ForceCloseParams (..), FundParams (..))
-import Perun.Offchain (OpenParams (..))
-import Perun.Onchain (ChannelState (..))
+import Perun.Offchain (OpenParams (..), getChannelId)
+import Perun.Onchain (Channel (..), ChannelState (..))
 import Plutus.PAB.Types (Config (..), WebserverConfig (..), defaultWebServerConfig)
 import Servant.Client.Core.BaseUrl (BaseUrl (..), Scheme (..))
 import System.Random.Stateful
@@ -125,7 +125,6 @@ main' (CLA aliceWallet bobWallet network) = do
           Right r -> return r
 
   -- MultiClient description.
-  randChannelId <- abs <$> randomM globalStdGen
   void . runMultiClientWith @["alice", "bob"] states $ do
     alicePKH <- actionBy @"alice" $ gets (PaymentPubKeyHash . (^. pubKeyHash))
     aliceSPK <- actionBy @"alice" $ gets (^. signingPubKey)
@@ -133,25 +132,28 @@ main' (CLA aliceWallet bobWallet network) = do
     bobSPK <- actionBy @"bob" $ gets (^. signingPubKey)
     -- Also subscribe to Websocket events for the contract instance of alice.
     subscribeToContractEvents @"alice"
+    nonce <- abs <$> randomM globalStdGen
     -- Endpoint Parameters
     let payPubKeyHashes = [alicePKH, bobPKH]
         signingPKs = [aliceSPK, bobSPK]
+        channelId = getChannelId (Channel defaultTimeLock signingPKs payPubKeyHashes nonce)
         startParams =
           OpenParams
-            { spChannelId = randChannelId,
+            { spChannelId = channelId,
               spSigningPKs = signingPKs,
               spPaymentPKs = payPubKeyHashes,
               spBalances = [defaultBalance, defaultBalance],
-              spTimeLock = defaultTimeLock
+              spTimeLock = defaultTimeLock,
+              spNonce = nonce
             }
 
         fundParams =
-          FundParams randChannelId 1
+          FundParams channelId 1
 
-        stateV1 = ChannelState randChannelId [defaultBalance `div` 2, (defaultBalance `div` 2) * 3] 1 False
+        stateV1 = ChannelState channelId [defaultBalance `div` 2, (defaultBalance `div` 2) * 3] 1 False
         change = defaultBalance `div` 4
-        stateV2 = ChannelState randChannelId [defaultBalance + change, defaultBalance - change] 2 False
-        forceCloseParams = ForceCloseParams randChannelId
+        stateV2 = ChannelState channelId [defaultBalance + change, defaultBalance - change] 2 False
+        forceCloseParams = ForceCloseParams channelId
     signedStateV1 <- update stateV1
     signedStateV2 <- update stateV2
     let disputeBobParams = DisputeParams signingPKs signedStateV1
@@ -159,7 +161,7 @@ main' (CLA aliceWallet bobWallet network) = do
 
     -- Trace definition.
     callEndpointFor @"alice" "start" startParams
-    delayAll 10_000_000
+    delayAll 15_000_000
     callEndpointFor @"bob" "fund" fundParams
     delayAll 30_000_000
     callEndpointFor @"bob" "dispute" disputeBobParams

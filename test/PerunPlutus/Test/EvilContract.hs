@@ -38,7 +38,7 @@ data FundCase = FundSteal | FundViolateChannelIntegrity | FundInvalidFunded | Fu
   deriving stock (P.Eq, P.Show, Data)
 
 data EvilFund = EvilFund
-  { efChannelId :: !Integer,
+  { efChannelId :: !ChannelID,
     efFunderIdx :: !Integer,
     efCase :: FundCase
   }
@@ -50,7 +50,7 @@ data AbortCase = AbortInvalidFunding | AbortAlreadyFunded | AbortUnrelatedPartic
   deriving stock (P.Eq, P.Show, Data)
 
 data EvilAbort = EvilAbort
-  { eaChannelId :: Integer,
+  { eaChannelId :: !ChannelID,
     abCase :: AbortCase
   }
   deriving (Generic, ToJSON, FromJSON)
@@ -90,7 +90,7 @@ data ForceCloseCase = ForceCloseInvalidInput | ForceCloseValidInput
   deriving stock (P.Eq, P.Show, Data)
 
 data EvilForceClose = EvilForceClose
-  { efcChannelId :: Integer,
+  { efcChannelId :: !ChannelID,
     fcCase :: ForceCloseCase
   }
   deriving (Generic, ToJSON, FromJSON)
@@ -274,7 +274,7 @@ dispute EvilDispute {..} = case edCase of
 disputeWrongState :: ChannelID -> SignedState -> Contract EvilContractState s PerunError ()
 disputeWrongState cid sst = do
   (oref, o, d) <- findChannel cid
-  disputeWithDatum oref o cid sst $ d {state = ChannelState 99 [] 0 False}
+  disputeWithDatum oref o cid sst $ d {state = ChannelState (ChannelID "abc") [] 0 False}
 
 disputeValidInput :: ChannelID -> SignedState -> [PaymentPubKey] -> Contract EvilContractState s PerunError ()
 disputeValidInput cid sst keys = do
