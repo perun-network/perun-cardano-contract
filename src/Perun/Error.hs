@@ -8,12 +8,15 @@
 module Perun.Error
   ( PerunError (..),
     FindChannelException (..),
+    SubscriptionException (..),
+    DatumException (..),
     AsPerunError (..),
   )
 where
 
 import Control.Lens
 import Data.Aeson
+import Data.Text (Text)
 import GHC.Generics (Generic)
 import Plutus.Contract
 
@@ -50,6 +53,8 @@ data PerunError
     -- already funded.
     ForceCloseOnNonFundedChannelError
   | FindChannelError !FindChannelException
+  | SubscriptionError !SubscriptionException
+  | SomeContractError !ContractError
   deriving (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
@@ -69,7 +74,22 @@ data FindChannelException
   deriving (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
+data SubscriptionException
+  = InvalidOnchainStatesForChooserErr !Text
+  | UnexpectedNumberOfChannelUTXOsErr
+  | DatumErr !DatumException
+  | CorruptedChainIndexErr
+  | DivergentChannelHistories
+  | ContractEndedErr
+  deriving (Eq, Show, Generic)
+  deriving anyclass (ToJSON, FromJSON)
+
+data DatumException
+  = NoOutputDatumErr
+  deriving (Eq, Show, Generic)
+  deriving anyclass (ToJSON, FromJSON)
+
 makeClassyPrisms ''PerunError
 
 instance AsContractError PerunError where
-  _ContractError = _PerunContractError
+  _ContractError = _SomeContractError

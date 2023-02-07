@@ -124,7 +124,7 @@ data Channel = Channel
     pPaymentPKs :: ![PaymentPubKeyHash],
     pNonce :: !Integer
   }
-  deriving (P.Show, Generic, ToJSON, FromJSON)
+  deriving (P.Eq, P.Show, Generic, ToJSON, FromJSON)
 
 -- Equality of two Channels
 instance Eq Channel where
@@ -191,7 +191,7 @@ data ChannelDatum = ChannelDatum
     funded :: !Bool,
     disputed :: !Bool
   }
-  deriving (P.Show, Generic, ToJSON, FromJSON)
+  deriving (P.Eq, P.Show, Generic, ToJSON, FromJSON)
 
 PlutusTx.unstableMakeIsData ''ChannelDatum
 PlutusTx.makeLift ''ChannelDatum

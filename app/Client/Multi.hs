@@ -28,11 +28,13 @@ module Multi
     callEndpointFor,
     actionBy,
     subscribeToContractEvents,
+    subscribeAdjudicator,
     update,
     mapAllClients,
   )
 where
 
+import Adjudicator
 import Client
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async
@@ -115,6 +117,11 @@ subscribeToContractEvents = actionBy @actor $ do
   cid <- gets (^. instClientId)
   void . liftIO . async $ runContractSubscription apiUrl cid
 
+subscribeAdjudicator :: forall actor actors. (HasActor actor actors) => ChannelID -> MultiClient actors ()
+subscribeAdjudicator cID = actionBy @actor $ do
+  clientState <- get
+  void . liftIO . async $ runAdjudicatorForClient clientState cID
+
 update :: forall actors. (SymbolList actors) => ChannelState -> MultiClient actors SignedState
 update newState = SignedState <$> (mapAllClients @actors $ signState newState)
 
@@ -158,9 +165,9 @@ instance (SymbolList ss, KnownSymbol s) => SymbolList (s ': ss) where
 
 -- | FindActor looks up an actor in the given type level list of actors.
 type family FindActor (actor :: Symbol) (actors :: [Symbol]) where
-  -- We use an explicit `TypeError` message here instead of keeping this
-  -- function generic, since it is only meant to be used in this specific
-  -- context.
+-- We use an explicit `TypeError` message here instead of keeping this
+-- function generic, since it is only meant to be used in this specific
+-- context.
   FindActor actor '[] =
     TypeError
       ( 'ShowType actor

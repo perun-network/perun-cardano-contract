@@ -147,7 +147,7 @@ withWallet (SomeNetworkDiscriminant (Proxy :: Proxy n)) walletURL pabURL wlt (mn
 
 -- | runClientInit runs the `Servant.ClientM` in the `PerunClientInitializer`
 -- context.
-runClientInit :: ClientM a -> ClientEnv -> PerunClientInitializer (Either ClientError a)
+runClientInit :: (MonadIO m) => ClientM a -> ClientEnv -> m (Either ClientError a)
 runClientInit cm = liftIO . runClientM cm
 
 -- | runClient runs the `Servant.ClientM` in the `PerunClient` context.

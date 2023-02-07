@@ -164,12 +164,12 @@ instance ContractModel PerunModel where
           Just pms@(PerunModelState chst _tl oldFunding isFunded isDisputed)
             | isFunded || isDisputed -> P.error "Funding only works on unfunded & undisputed channels"
             | otherwise ->
-                let newFunding = addFunding (balances chst !! idx) idx oldFunding
-                 in Just $
-                      pms
-                        { _chanFunding = newFunding,
-                          _chanFunded = newFunding == balances chst
-                        }
+              let newFunding = addFunding (balances chst !! idx) idx oldFunding
+               in Just $
+                    pms
+                      { _chanFunding = newFunding,
+                        _chanFunded = newFunding == balances chst
+                      }
       )
     s <-
       getContractState >>= \case

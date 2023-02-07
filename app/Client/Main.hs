@@ -154,6 +154,8 @@ main' (CLA aliceWallet bobWallet network) = do
         change = defaultBalance `div` 4
         stateV2 = ChannelState channelId [defaultBalance + change, defaultBalance - change] 2 False
         forceCloseParams = ForceCloseParams channelId
+
+    subscribeAdjudicator @"alice" channelId
     signedStateV1 <- update stateV1
     signedStateV2 <- update stateV2
     let disputeBobParams = DisputeParams signingPKs signedStateV1
