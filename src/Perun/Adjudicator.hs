@@ -1,15 +1,7 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TupleSections #-}
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE TypeOperators #-}
-
 module Perun.Adjudicator
   ( adjudicator,
     adjudicatorSubscription,
+    AdjudicatorSchema,
   )
 where
 
@@ -141,35 +133,6 @@ waitForUpdate cID = do
                 Left err -> throwing _PerunError err
                 Right newState -> pure $ Transition newState
   pure success
-
-getInput :: (PlutusTx.FromData i) => TxOutRef -> ChainIndexTx -> Maybe i
-getInput outRef tx = do
-  let findRedeemer (idx, _) = Map.lookup (Ledger.RedeemerPtr Ledger.Spend idx) (_citxRedeemers tx)
-  Ledger.Redeemer r <-
-    listToMaybe
-      . mapMaybe findRedeemer
-      . filter (\(_, Ledger.TxIn {Ledger.txInRef}) -> outRef == txInRef)
-      . zip [0 ..]
-      $ _citxInputs tx
-  PlutusTx.fromBuiltinData r
-
--- | getOnChainEvents returns all past events for the given ChannelID.
-getOnChainEvents ::
-  (AsPerunError e, AsContractError e) =>
-  ChannelID ->
-  Contract PerunEvent s e [ChannelEvent]
-getOnChainEvents cID = do
-  syncToCurrentSlot -- Make sure chain index is in sync with us (PAB).
-  utxosAt (channelAddress cID) >>= handlePastEvents
-  where
-    handlePastEvents outRefs
-      -- The channel in question was not deployed yet.
-      | Map.null outRefs = return []
-      -- The channel in question was already deployed and more events could
-      -- have happened up to now.
-      | otherwise = case Map.toList outRefs of
-        [(e, _)] -> traceEventsToChannelCreation cID e
-        _else -> throwing _FindChannelError UnexpectedNumberOfUTXOsError
 
 -- | getAllOnChainEvents retrieves all on-chain events which might have occured
 -- already for the given ChannelID.
@@ -411,46 +374,6 @@ filterForChannelOutputs txoRefs = do
          in numOfDatums
   return $ filter (\(_, _, i) -> i /= 0) . zipWith (\(a, b) c -> (a, b, c)) txs $ map countDatums txs
 
--- | traceEventsToChannelCreation traces the TX history for the given ChannelID
--- to its creation and accumulates all events that happened in the meantime.
-traceEventsToChannelCreation ::
-  (AsPerunError e, AsContractError e) =>
-  ChannelID ->
-  TxOutRef ->
-  Contract PerunEvent s e [ChannelEvent]
-traceEventsToChannelCreation cID txRef = do
-  txFromTxId (txOutRefId txRef) >>= \case
-    Nothing -> return []
-    Just citx -> collectChannelTxChain cID citx >>= translateEventsFromHistory
-
--- | collectChannelTxChain collects all ChainIndexTxOuts to the creation of the
--- channel. The resulting list of transaction outputs is ordered beginning from
--- the oldest output.
-collectChannelTxChain ::
-  (AsPerunError e, AsContractError e) =>
-  ChannelID ->
-  ChainIndexTx ->
-  Contract PerunEvent s e [(ChainIndexTx, ChainIndexTxOut)]
-collectChannelTxChain cID tip = do
-  case findOutput tip of
-    Nothing -> throwing _SubscriptionError CorruptedChainIndexErr
-    Just (og, citx) -> go tip [(citx, og)]
-  where
-    addr = channelAddress cID
-    go curTx resolvedOutputs = do
-      let resolveTx input = do
-            mcitx <- txFromTxId (txOutRefId . txInRef $ input)
-            let res = mcitx >>= findOutput
-            return res
-      potentialInputs <- catMaybes <$> mapM resolveTx (curTx ^. citxInputs)
-      case potentialInputs of
-        [] -> return resolvedOutputs
-        [(output, nextTx)] -> go nextTx ((curTx, output) : resolvedOutputs)
-        _else -> throwing _SubscriptionError UnexpectedNumberOfChannelUTXOsErr
-    findOutput citx = case citx ^. citxOutputs of
-      InvalidTx -> fail "CorruptedChainIndex"
-      ValidTx outs -> (,citx) <$> find (\o -> addr == citoAddress o) outs
-
 -- | translateEventsFromHistory translates a list of transaction outputs to
 -- ChannelEvents.
 translateEventsFromHistory ::
@@ -496,7 +419,7 @@ datumFromTx (ciTx, ciTxOut) = do
   case citoDatum ciTxOut of
     NoOutputDatum -> throwError $ DatumErr NoOutputDatumErr
     OutputDatumHash h -> case Map.lookup h (ciTx ^. citxData) of
-      Nothing -> throwError CorruptedChainIndexErr
+      Nothing -> throwError CorruptedChainIndexErr -- TODO: Use correct error type.
       Just d -> channelDatumFromDatum d
     OutputDatum d -> channelDatumFromDatum d
 

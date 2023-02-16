@@ -88,19 +88,41 @@ executable perun-pab
 library
     import: shared
     exposed-modules: Perun
-                   , Perun.Onchain
+                   , PAB
                    , Perun.Adjudicator
+                   , Perun.Error
                    , Perun.Offchain
+                   , Perun.Onchain
                    , Perun.Offchain.State
                    , Perun.Offchain.Event
-                   , Perun.Error
-                   , PAB
-
-    -- Modules included in this library but not exported.
-    -- other-modules:
+                   , Perun.Offchain.ChannelTxPool
+                   , Perun.Offchain.ChannelTxPool.ChannelTxPool
+                   , Perun.Offchain.ChannelTxPool.Types
 
     -- LANGUAGE extensions used by modules in this package.
-    -- other-extensions:
+    default-extensions: FlexibleInstances
+                      , LambdaCase
+                      , TupleSections
+                      , TemplateHaskell
+                      , PatternSynonyms
+                      , DataKinds
+                      , FlexibleContexts
+                      , OverloadedStrings
+                      , TypeApplications
+                      , TypeOperators
+                      , DeriveAnyClass
+                      , DeriveDataTypeable
+                      , DeriveGeneric
+                      , NumericUnderscores
+                      , DerivingStrategies
+                      , FlexibleContexts
+                      , GeneralizedNewtypeDeriving
+                      , MultiParamTypeClasses
+                      , RecordWildCards
+                      , ScopedTypeVariables
+                      , RankNTypes
+                      , TypeFamilies
+
     build-depends:
                       , aeson
                       , bytestring

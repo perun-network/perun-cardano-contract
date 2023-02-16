@@ -5,14 +5,11 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
@@ -20,7 +17,6 @@
 
 module Perun.Offchain where
 
-import Control.Lens hiding (para)
 import Control.Monad as CM hiding (fmap)
 import Control.Monad.Error.Lens
 import Data.Aeson (FromJSON, ToJSON, encode)
@@ -37,13 +33,8 @@ import qualified Ledger.Constraints as Constraints
 import Ledger.Constraints.OffChain ()
 import qualified Ledger.Scripts as S
 import Perun.Error
-import Perun.Offchain.Event
-import Perun.Offchain.State
 import Perun.Onchain
-import Plutus.ChainIndex (OutputDatum (NoOutputDatum, OutputDatum, OutputDatumHash), Page (Page))
-import Plutus.ChainIndex.Api (TxosResponse (TxosResponse))
 import Plutus.ChainIndex.Types hiding (ChainIndexTxOut)
-import qualified Plutus.ChainIndex.Types as CI
 import Plutus.Contract
 import Plutus.Contract.Effects (ChainIndexQuery (..), ChainIndexResponse (TxIdResponse), PABReq (..), _ChainIndexQueryResp)
 import Plutus.Contract.Request (pabReq, txoRefsAt)
@@ -339,9 +330,9 @@ close ::
   (AsPerunError e, AsContractError e) =>
   CloseParams ->
   Contract w s e ()
-close params@(CloseParams keys sst) = do
+close (CloseParams keys sst) = do
   let s@ChannelState {..} = extractVerifiedState sst keys
-  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync channelId
+  (oref, o, ChannelDatum {..}) <- findChannelWithSync channelId
   unless (all isLegalOutValue balances) . throwing_ $ _InsufficientMinimumAdaBalanceError
   unless (isValidStateTransition state s) . throwing_ $ _InvalidStateTransitionError
   unless final . throwing_ $ _CloseOnNonFinalChannelError
