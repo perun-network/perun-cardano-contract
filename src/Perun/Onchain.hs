@@ -1,21 +1,3 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveAnyClass #-}
-{-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE DerivingVia #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module Perun.Onchain
@@ -177,7 +159,7 @@ PlutusTx.makeLift ''SignedState
 
 -- Redeemer Datatype
 data ChannelAction = Fund | Abort | MkDispute !SignedState | MkClose !SignedState | ForceClose
-  deriving (P.Show, Generic, ToJSON, FromJSON)
+  deriving (P.Eq, P.Show, Generic, ToJSON, FromJSON)
 
 PlutusTx.unstableMakeIsData ''ChannelAction
 PlutusTx.makeLift ''ChannelAction
