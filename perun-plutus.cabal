@@ -115,6 +115,7 @@ library
                       , DeriveGeneric
                       , NumericUnderscores
                       , DerivingStrategies
+                      , DerivingVia
                       , FlexibleContexts
                       , GeneralizedNewtypeDeriving
                       , MultiParamTypeClasses
