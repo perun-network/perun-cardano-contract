@@ -177,9 +177,8 @@ generateHistory cid hist =
             -- realm of undefined behaviour.
             return $ mkChannelGenesis ctx
           _else -> throwError CorruptedChainIndexErr
-        traceChannelHistory genesis . filter (isNotThisTx genesis) $ hist
-   in channelGenesis
-  where
+   in traceChannelHistory genesis . filter (isNotThisTx genesis) $ hist
+      where
     resolveDatum (citx, TxOutRef _ idx, _) = do
       output <- case citx ^. citxOutputs of
         InvalidTx -> throwError CorruptedChainIndexErr
@@ -191,15 +190,15 @@ generateHistory cid hist =
       ChannelTxFirst ->
       [ChannelTx] ->
       Either SubscriptionException ChannelHistory
-    traceChannelHistory genesisTx txPool =
-      ChannelCreation genesisDatum <$> go genesisCitx genesisTxOutRef genesisDatum txPool
+    traceChannelHistory genesisTx@(ChannelTx gCitx _ (_, genesisDatum)) txPool =
+      ChannelCreation genesisDatum <$> go genesisTx txPool
       where
         ourValidator = channelValidator cid
-        go _ _ _ [] = do
+        go _ [] = do
           -- No transactions in tx pool left, end of ChannelHistory.
           return ChannelNil
-        go citx txOutRef d txPool = do
-          next <- case find (isNextTx (citx, txOutRef)) txPool of
+        go ctx txPool = do
+          next <- case find (isNextTx ctx) txPool of
             Nothing -> do
               -- If we do not find a successor TX in the txPool AND
               -- have things left in the pool, something is not correct
@@ -207,80 +206,38 @@ generateHistory cid hist =
               throwError DivergentChannelHistories
             Just tx -> return tx
           case next of
-            (nCitx, nTxOutRef, 2, Right nD) -> do
-              -- nCitx contains two ChannelDatums, which means we reached a
-              -- point in its history, where the channel was progressed
-              -- on-chain. We can safely assume, that the channel is still
-              -- alive afterwards. So we continue tracing its history.
-              --
-              -- TODO: Make sure both datums are connected to channel UTXOs.
-              let inputsWithThisChannel = filterForValidatorAndChannelDatum ourValidator d nCitx
-              r <- case inputsWithThisChannel of
-                [TxIn _ (Just (ConsumeScriptAddress _v r _rd))] ->
-                  return . fromBuiltinData . getRedeemer $ r
-                _else -> do
-                  -- Multiple UTXOs with our ChannelDatum cannot exist,
-                  -- something is wrong, thus we abort here.
-                  throwError CorruptedChainIndexErr
-              let txPool' = filter (isNotThisTx nCitx) txPool
-              case r of
-                Just Fund -> ChannelStep Fund nD <$> go nCitx nTxOutRef nD txPool'
-                Just dis@(MkDispute _) -> ChannelStep dis nD <$> go nCitx nTxOutRef nD txPool'
-                _else -> throwError CorruptedChainIndexErr
-
+            ChannelTx nCitx (Just (iRef, action, iChannelDatum)) (Just (oRef, oChannelDatum)) -> do
+              -- We have a channel update. Channel makes a step.
+              ChannelStep action <$> go next (filter (isNotThisTx nCitx) txPool)
+            ChannelTx nCitx (Just (iRef, action, iChannelDatum)) Nothing -> do
+              -- We have a channel close. The transaction closing the channel
+              -- has to reference the same state as the last state in the
+              -- previous transaction.
+              let isSameChannelDatum = do
+                cd <- ctx ^. channelTxOutRef . _Just . _2
+                return $ cd == iChannelDatum
+              -- Throw an error if the channelstates do not match.
+              unless (fromMaybe False isSameChannelDatum) $ throwError CorruptedChainIndexErr
+              ChannelConclude action <$> go next (filter (isNotThisTx nCitx) txPool)
             -- nCitx has only a single ChannelDatum. Either the channel was
             -- concluded or we reached the local end of the ChannelHistory.
-            (nCitx, _nTxOutRef, 1, Left (DatumErr NoOutputDatumErr)) -> do
-              -- The transaction referenced by the given output datum does not
-              -- contain a UTXO with a ChannelDatum as an output. It has to be
-              -- an input UTXO containing the last ChannelState we already know
-              -- about (`d`).
-              let inputsWithThisChannel = filterForValidatorAndChannelDatum ourValidator d nCitx
-              r <- case inputsWithThisChannel of
-                [TxIn _ (Just (ConsumeScriptAddress _v r _rd))] ->
-                  return . fromBuiltinData . getRedeemer $ r
-                _else -> throwError CorruptedChainIndexErr
-              case r of
-                Just c@(MkClose _) -> return $ ChannelConclude c ChannelNil
-                Just c@ForceClose -> return $ ChannelConclude c ChannelNil
-                Just Abort -> return $ ChannelConclude Abort ChannelNil
-                Nothing -> do
-                  -- No redeemer could be parsed, this should be impossible,
-                  -- because we have a valid PerunScript in our input together
-                  -- with a valid state.
-                  throwError CorruptedChainIndexErr
-                _else -> do
-                  -- The channel was progressed for all other cases, stop the
-                  -- history here.
-                  -- TODO: Make this a proper recursion by using a
-                  -- (Maybe ChannelDatum) for calling the recursion.
-                  return ChannelNil
-            (_nCitx, _nTxOutRef, 1, Right _nD) -> do
-              -- The transaction referenced by the given UTXO contains a single
-              -- ChannelDatum in its OUTPUT. This is not possible, since the
-              -- txPool should NOT contain the start of the channel when we
-              -- reach this point.
+            ChannelTx nCitx Nothing (Just _)  -> do
+              -- This is not possible, since the txPool should NOT contain the
+              -- start of the channel when we reach this point.
               throwError CorruptedChainIndexErr
             _else -> do
-              -- The next transaction does not satisfy the invariants described
-              -- in `isUniqueHistory`.
+              -- There is no next transaction but we still have txs left in the
+              -- txPool. This is not possible, since the txPool should NOT
+              -- contain the start of the channel when we reach this point.
               throwError DivergentChannelHistories -- TODO: Use correct error here.
-    isNextTx ::
-      (ChainIndexTx, TxOutRef) ->
-      (ChainIndexTx, TxOutRef, Int, Either SubscriptionException ChannelDatum) ->
-      Bool
-    isNextTx (_, txOutRef) (nCitx, _, _, _) = any (\(TxIn ref _) -> txOutRef == ref) $ nCitx ^. citxInputs
+    isNextTx :: ChannelTx -> ChannelTx -> Bool
+    isNextTx (ChannelTx citx _ o) (ChannelTx nCitx ni _) =
+      let isNextTx' = do
+            ref <- fst <$> o
+            nRef <- fst <$> ni
+            return $ ref == nRef
+       in fromMaybe False isNextTx'
     isNotThisTx citx pCitx = (citx ^. channelcitx) /= (pCitx ^. channelcitx)
-    filterForValidatorAndChannelDatum ourValidator d =
-      filter
-        ( \case
-            TxIn _ (Just (ConsumeScriptAddress (Versioned otherValidator _) _r rd)) ->
-              case channelDatumFromDatum rd of
-                Right d' -> d == d' && ourValidator == otherValidator
-                _else -> False
-            _else -> False
-        )
-        . _citxInputs
 
 -- | ChannelHistory describes the on-chain history of a Perun channel.
 data ChannelHistory
@@ -291,104 +248,23 @@ data ChannelHistory
   deriving (Show)
 
 deduceEvents :: ChannelHistory -> [ChannelEvent]
-deduceEvents = undefined
+deduceEvents hist = go Nothing hist
+  where go _ ChannelNil = []
+        go _ (ChannelCreation d h) = Created d : go (Just d) h
+        go _ (ChannelStep Abort d h) = Concluded d : go (Just d) h
+        go _ (ChannelStep ForceClose d h) = Concluded d : go (Just d) h
+        go _ (ChannelStep (MkClose _) d h) = Concluded d : go (Just d) h
+        go (Just d') (ChannelStep Fund d h)  = mkDepositList d d' ++ go (Just d) h
+        go _ (ChannelStep (MkDispute _) d h) = Disputed d : go (Just d) h
+        -- We currently expect every participant to deposit for himself. The
+        -- resulting event list for deposits will always contain a single
+        -- element as long as this restriction is in place.
+        mkDepositList d d' =
+          let newFunding = d ^. funding
+              prevFunding = d' ^. funding
+              lenPrevFunding = length prevFunding
+           in [Deposited d' (fromIntegral lenPrevFunding) (drop lenPrevFunding newFunding)]
 
--- | isUniqueHistory checks that the given pool of transactions describes a
--- unique history of some channel. This is true iff the following conditions
--- hold:
--- 1. At maximum two UNIQUE ChainIndexTxs with a single ChannelDatum exist.
--- 2. All other ChainIndexTxs contain exactly two ChannelDatums, where one is
---    for the input UTXO and one for the output UTXO.
--- 3. Implied by 1., 2. and the UTXO model but checked explicitely as a sanity
--- check: ZERO single ChannelDatum txs exist => Zero multi ChannelDatum txs
-isUniqueHistory :: [(ChainIndexTx, TxOutRef, Int)] -> Bool
-isUniqueHistory refs =
-  let uniqueRefs = dedup refs
-      (singleDatumTxs, multiDatumTxs) = split (\(_citx, _txoref, n) -> n == 1) uniqueRefs
-      numOfSingleDatumTxs = length singleDatumTxs
-      numOfTwoDatumTxs = length . filter (\(_, _, n) -> n == 2) $ multiDatumTxs
-   in ( -- 1.
-        (numOfSingleDatumTxs == 1 || numOfSingleDatumTxs == 2)
-          -- 2.
-          && numOfTwoDatumTxs == length multiDatumTxs
-      )
-        -- 3.
-        || (null singleDatumTxs && null multiDatumTxs)
-
--- | split splits the given list using the condition into two lists, where the
--- left result identifies all entries for which the condition was true, while
--- the right result identifies all entries for which the condition was false.
-split :: (a -> Bool) -> [a] -> ([a], [a])
-split cond as = go as ([], [])
-  where
-    go [] res = res
-    go (x : xs) (ls, rs) =
-      if cond x
-        then go xs (x : ls, rs)
-        else go xs (ls, x : rs)
-
--- | dedup removes duplicates from a list of triplets, where the first entry is
--- regarded as the comparative argument.
-dedup :: Eq a => [(a, b, c)] -> [(a, b, c)]
-dedup [] = []
-dedup (oref : orems) = go oref orems []
-  where
-    go :: Eq a => (a, b, c) -> [(a, b, c)] -> [(a, b, c)] -> [(a, b, c)]
-    go ref [] res = reverse (ref : res)
-    go ref@(citx, _, _) (nextRef@(citx', _, _) : rems) res =
-      if citx == citx'
-        then go nextRef rems res
-        else go nextRef rems (ref : res)
-
-filterForChannelOutputs ::
-  (AsPerunError e, AsContractError e) =>
-  [TxOutRef] ->
-  Contract PerunEvent s e [(ChainIndexTx, TxOutRef, Int)]
-filterForChannelOutputs txoRefs = do
-  let resolveTx = txFromTxId . txOutRefId
-  txs <- catMaybes <$> mapM (\r -> fmap (,r) <$> resolveTx r) txoRefs
-  let countDatums (citx, _) =
-        let toChannelDatum (Datum d) = PlutusTx.fromBuiltinData @ChannelDatum d
-            datums = catMaybes . Map.elems . Map.map toChannelDatum $ citx ^. citxData
-            numOfDatums = length datums
-         in numOfDatums
-  return $ filter (\(_, _, i) -> i /= 0) . zipWith (\(a, b) c -> (a, b, c)) txs $ map countDatums txs
-
--- | translateEventsFromHistory translates a list of transaction outputs to
--- ChannelEvents.
-translateEventsFromHistory ::
-  (AsPerunError e, AsContractError e) =>
-  [(ChainIndexTx, ChainIndexTxOut)] ->
-  Contract PerunEvent s e [ChannelEvent]
-translateEventsFromHistory = para ralg
-  where
-    ralg Nil = return []
-    ralg (Cons _ ([], _)) = return []
-    ralg (Cons curTx (nextTx : _, actions)) = do
-      a <- datumFromTx' curTx
-      b <- datumFromTx' nextTx
-      let event = resolveEvent a b
-      (event ++) <$> actions
-
-    datumFromTx' ::
-      (AsPerunError e, AsContractError e) =>
-      (ChainIndexTx, ChainIndexTxOut) ->
-      Contract PerunEvent s e ChannelDatum
-    datumFromTx' (ciTx, ciTxOut) = do
-      case citoDatum ciTxOut of
-        NoOutputDatum -> throwing _SubscriptionError CorruptedChainIndexErr
-        OutputDatumHash h -> case Map.lookup h (ciTx ^. citxData) of
-          Nothing -> throwing _SubscriptionError CorruptedChainIndexErr
-          Just d -> channelDatumFromDatum' d
-        OutputDatum d -> channelDatumFromDatum' d
-
-    channelDatumFromDatum' ::
-      (AsPerunError e, AsContractError e) =>
-      Datum ->
-      Contract PerunEvent s e ChannelDatum
-    channelDatumFromDatum' (Datum b) = case PlutusTx.fromBuiltinData b of
-      Nothing -> throwing _FindChannelError WrongDatumTypeError
-      Just d@ChannelDatum {} -> return d
 
 -- | datumFromTx returns the ChannelDatums for the given ChannelID contained
 -- in the given ChainIndexTx.
@@ -427,6 +303,8 @@ getOnChainState cID = do
 -- of UTXO's. Since there might be more than one UTXO available at a given
 -- scriptaddress, a chooser has to be able to determine which of those states
 -- is up to date and correct.
+--
+-- TODO: Implement a chooser which allows watching for the ThreadToken.
 chooser :: [OnChainState] -> Either PerunError OnChainState
 chooser [ocs] = Right ocs
 chooser ocs =
