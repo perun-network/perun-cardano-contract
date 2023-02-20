@@ -19,6 +19,7 @@ import Ledger hiding (ChainIndexTxOut)
 import qualified Ledger.Tx as L
 import Perun.Error
 import Perun.Offchain
+import Perun.Offchain.ChannelTxPool
 import Perun.Offchain.Event
 import Perun.Offchain.State
 import Perun.Onchain
@@ -147,57 +148,36 @@ getAllOnChainEvents ::
   (AsPerunError e, AsContractError e) =>
   ChannelID ->
   Contract PerunEvent s e [ChannelEvent]
-getAllOnChainEvents cID = do
+getAllOnChainEvents cid = do
   syncToCurrentSlot
-  txoRefsAt def (channelAddress cID) >>= \case
-    TxosResponse (Page _ _ []) -> do
-      -- No transaction outputs found at channel address -> The channel was
-      -- definitely never created.
-      return []
-    TxosResponse (Page _ _ txoRefs) -> do
-      -- Found transaction outputs, check if they contain channel datums or if
-      -- they are just random txs independent from our channel.
-      validRefs <- filterForChannelOutputs txoRefs
-      -- TODO: Handle next txoRefs.
-      handlePastEvents validRefs
+  txpoolForChannel cid >>= handlePastEvents
   where
-    handlePastEvents [] = do
-      -- Again, the channel was never created.
+    handlePastEvents (ChannelTxPool []) = do
+      -- The channel was never created.
       return []
-    handlePastEvents refs = do
-      -- Found transaction outputs with channel datums, parse events.
-      -- What follows is a sanity check: Peruns channel progression logic does
-      -- not allow for multiple histories of the same channel to exist, but we
-      -- want to make sure to have a safeguard against unexpected behavior.
-      -- Better be safe than sorry.
-      unless (isUniqueHistory refs) $ throwing _SubscriptionError DivergentChannelHistories
-      case generateHistory cID refs of
+    handlePastEvents (ChannelTxPool ctxs) = do
+      case generateHistory cid refs of
         Left err -> throwing _SubscriptionError err
         Right hist -> return $ deduceEvents hist
 
 -- | generateHistory creates a history for the given ChannelID using tx from
 -- the given TxPool.
-generateHistory :: ChannelID -> [(ChainIndexTx, TxOutRef, Int)] -> Either SubscriptionException ChannelHistory
+generateHistory :: ChannelID -> [ChannelTx] -> Either SubscriptionException ChannelHistory
 generateHistory _cid [] = return ChannelNil
 generateHistory cid hist =
-  let histDatums =
-        -- We filter the resulting map to throw out all transaction outputs,
-        -- which do not directly identify `_ref` with a concrete channel datum.
-        -- The remaining list contains up to two possible transaction which can
-        -- either describe the creation or ending of a channel, together with
-        -- possibly multiple transactions progressing said channel.
-        filter (\(_, _ref, n, d) -> n == 2 && isRight d)
-          . map (\e@(a, b, c) -> (a, b, c, resolveDatum e))
-          $ hist
-      -- channelGenesis should ALWAYS exist when we reach this path, otherwise
-      -- the given history does not relate to a Perun channel.
-      -- channelGenesis :: Either SubscriptionException (CI.ChainIndexTx, TxOutRef, ChannelDatum)
+  let -- channelGenesis should ALWAYS exist when we reach this path, otherwise
+      -- the given history does not relate to a Perun channel, or something
+      -- else went horribly wrong.
       channelGenesis = do
-        genesis@(gCitx, _, _) <- case filter isChannelGenesis histDatums of
+        genesis <- case filter isChannelGenesis hist of
           [] -> throwError CorruptedChainIndexErr
-          [(citx, txref, _, Right d)] -> return (citx, txref, d)
+          [ctx] -> do
+            -- We expect the resulting list to have exactly one element. If
+            -- there are mutiple channel genesis transactions, we are in the
+            -- realm of undefined behaviour.
+            return $ mkChannelGenesis ctx
           _else -> throwError CorruptedChainIndexErr
-        traceChannelHistory genesis . filter (isNotThisTx gCitx) $ histDatums
+        traceChannelHistory genesis . filter (isNotThisTx genesis) $ hist
    in channelGenesis
   where
     resolveDatum (citx, TxOutRef _ idx, _) = do
@@ -205,13 +185,13 @@ generateHistory cid hist =
         InvalidTx -> throwError CorruptedChainIndexErr
         ValidTx os -> Right $ os !! fromIntegral idx
       datumFromTx (citx, output)
-    isChannelGenesis (_, _, 1, channelDatum) = isRight channelDatum
-    isChannelGenesis (_, _, i, _) = False
+    isChannelGenesis (ChannelTx _ Nothing (Just (_ref, channelDatum))) = isRight channelDatum
+    isChannelGenesis (ChannelTx _ i o) = False
     traceChannelHistory ::
-      (ChainIndexTx, TxOutRef, ChannelDatum) ->
-      [(ChainIndexTx, TxOutRef, Int, Either SubscriptionException ChannelDatum)] ->
+      ChannelTxFirst ->
+      [ChannelTx] ->
       Either SubscriptionException ChannelHistory
-    traceChannelHistory (genesisCitx, genesisTxOutRef, genesisDatum) txPool =
+    traceChannelHistory genesisTx txPool =
       ChannelCreation genesisDatum <$> go genesisCitx genesisTxOutRef genesisDatum txPool
       where
         ourValidator = channelValidator cid
@@ -290,7 +270,7 @@ generateHistory cid hist =
       (ChainIndexTx, TxOutRef, Int, Either SubscriptionException ChannelDatum) ->
       Bool
     isNextTx (_, txOutRef) (nCitx, _, _, _) = any (\(TxIn ref _) -> txOutRef == ref) $ nCitx ^. citxInputs
-    isNotThisTx citx (pCitx, _, _, _) = citx /= pCitx
+    isNotThisTx citx pCitx = (citx ^. channelcitx) /= (pCitx ^. channelcitx)
     filterForValidatorAndChannelDatum ourValidator d =
       filter
         ( \case
