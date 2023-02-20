@@ -8,6 +8,7 @@ module Perun.Offchain.ChannelTxPool.ChannelTxPool
 where
 
 import Control.Lens
+import Control.Monad (unless)
 import Control.Monad.Error.Lens (throwing)
 import Data.Default
 import Data.Either (rights)
