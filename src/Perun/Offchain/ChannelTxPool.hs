@@ -9,6 +9,6 @@ where
 
 import Perun.Offchain.ChannelTxPool.ChannelTxPool as C
 import Perun.Offchain.ChannelTxPool.Types as T hiding
-  ( ChannelTx (..),
+  ( ChannelTxDynamic (..),
     ChannelTxPool (..),
   )

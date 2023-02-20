@@ -1,4 +1,11 @@
-module Perun.Offchain.ChannelTxPool.ChannelTxPool () where
+module Perun.Offchain.ChannelTxPool.ChannelTxPool
+  ( txpoolForChannel,
+    mkTxPool,
+    mkChannelGenesis,
+    mkChannelStep,
+    mkChannelLast,
+  )
+where
 
 import Control.Lens
 import Control.Monad.Error.Lens (throwing)
@@ -20,10 +27,7 @@ txpoolForChannel ::
   (AsPerunError e, AsContractError e) =>
   ChannelID ->
   Contract w s e ChannelTxPool
-txpoolForChannel cid = do
-  txos <- allTxosAt $ channelAddress cid
-  filteredTxos <- mkTxPool cid txos
-  undefined
+txpoolForChannel cid = allTxosAt (channelAddress cid) >>= mkTxPool cid
 
 allTxosAt ::
   (AsPerunError e, AsContractError e) =>
@@ -98,6 +102,7 @@ data ChannelTxErr
   | NoChannelOutputErr
   | UnexpectedInvalidTxErr
   | ChannelCorruptedChainIndexErr
+  | WrongThreadTokenErr
   deriving (Show)
 
 resolveInput ::
@@ -175,10 +180,11 @@ resolveOutput cid citx = do
             throwError ChannelCorruptedChainIndexErr
           Just d -> return d
         OutputDatum d -> return d
-      -- TODO: How to assure, that this output really does belong to
-      -- our channel and not some other channel used in the same
-      -- transaction?
+      unless (hasThreadToken $ citoValue citxOut) $ throwError WrongThreadTokenErr
       (txOutRef,) <$> channelDatumFromDatum d
+    -- TODO: Finish. This is a placeholder for the thread token check.
+    hasThreadToken :: Value -> Bool
+    hasThreadToken v = True
 
 channelDatumFromDatum :: Datum -> Either ChannelTxErr ChannelDatum
 channelDatumFromDatum (Datum b) = case fromBuiltinData b of
@@ -197,3 +203,15 @@ dedup (oref : orems) = go oref orems []
       if ref == nextRef
         then go nextRef rems res
         else go nextRef rems (ref : res)
+
+mkChannelGenesis :: ChannelTx -> ChannelTxFirst
+mkChannelGenesis (ChannelTx citx Nothing (Just l)) = ChannelTx_ citx Nothing l
+mkChannelGenesis _ = error "mkChannelGenesis: Invalid channel genesis."
+
+mkChannelStep :: ChannelTx -> ChannelTxStep
+mkChannelStep (ChannelTx citx (Just l) (Just r)) = ChannelTx_ citx l r
+mkChannelStep _ = error "mkChannelStep: Invalid channel step."
+
+mkChannelLast :: ChannelTx -> ChannelTxLast
+mkChannelLast (ChannelTx citx (Just l) Nothing) = ChannelTx_ citx l Nothing
+mkChannelLast _ = error "mkChannelLast: Invalid channel last."

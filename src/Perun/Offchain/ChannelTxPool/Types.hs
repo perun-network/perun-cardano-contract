@@ -11,19 +11,45 @@ import Plutus.ChainIndex.Api
 --  1. All TXs contained are ONLY relevant for a single channel id.
 newtype ChannelTxPool = ChannelTxPool_ [ChannelTx]
 
+-- | ChannelTx is a ChannelTx without any constraints on the input and output.
+type ChannelTx =
+  ChannelTxDynamic
+    (Maybe (TxOutRef, ChannelAction, ChannelDatum))
+    (Maybe (TxOutRef, ChannelDatum))
+
+-- | ChannelTxStep is a ChannelTx which was proven to be a step in a channels
+-- lifecycle.
+type ChannelTxStep =
+  ChannelTxDynamic
+    (TxOutRef, ChannelAction, ChannelDatum)
+    (TxOutRef, ChannelDatum)
+
+-- | ChannelTxLast is a ChannelTx which was proven to be the last step in a
+-- channels lifecycle so far.
+type ChannelTxLast =
+  ChannelTxDynamic
+    (TxOutRef, ChannelAction, ChannelDatum)
+    (Maybe (TxOutRef, ChannelDatum))
+
+-- | ChannelTxFirst is a ChannelTx which was proven to be the first step in a
+-- channels lifecycle.
+type ChannelTxFirst =
+  ChannelTxDynamic
+    (Maybe (TxOutRef, ChannelAction, ChannelDatum))
+    (TxOutRef, ChannelDatum)
+
 -- | ChannelTx is a ChainIndexTx associated with a ChannelID. Done by
 -- construction.
-data ChannelTx = ChannelTx_
+data ChannelTxDynamic i o = ChannelTx_
   { -- | The ChainIndexTx of interest either consuming or producing a channel.
-    _channelTxChannelcitx :: !ChainIndexTx,
+    _channelTxDynamicChannelcitx :: !ChainIndexTx,
     -- | The ChannelTxInRef, if the ChanIndexTx contains a channel UTXO in one
     -- of its inputs, together with the ChannelDatum and Redeemer action.
-    _channelTxChannelTxInRef :: !(Maybe (TxOutRef, ChannelAction, ChannelDatum)),
+    _channelTxDynamicChannelTxInRef :: !i,
     -- | The ChannelTxOutRef, if the ChainIndexTx contains a channel UTXO in
     -- its output.
-    _channelTxChannelTxOutRef :: !(Maybe (TxOutRef, ChannelDatum))
+    _channelTxDynamicChannelTxOutRef :: !o
   }
-  deriving (Eq, Show)
 
 -- Pattern synonyms to allow hiding the internal representation of ChannelTx
 -- and ChannelTxPool. This ensures that we can use smart constructors to
@@ -39,11 +65,7 @@ data ChannelTx = ChannelTx_
 pattern ChannelTxPool :: [ChannelTx] -> ChannelTxPool
 pattern ChannelTxPool txs = ChannelTxPool_ txs
 
-pattern ChannelTx ::
-  ChainIndexTx ->
-  Maybe (TxOutRef, ChannelAction, ChannelDatum) ->
-  Maybe (TxOutRef, ChannelDatum) ->
-  ChannelTx
+pattern ChannelTx :: ChainIndexTx -> i -> o -> ChannelTxDynamic i o
 pattern ChannelTx citx txinref txoutref = ChannelTx_ citx txinref txoutref
 
 makeFields ''ChannelTxPool
