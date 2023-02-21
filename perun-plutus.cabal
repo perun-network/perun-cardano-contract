@@ -89,6 +89,7 @@ library
     import: shared
     exposed-modules: Perun
                    , PAB
+                   , Orphans
                    , Perun.Adjudicator
                    , Perun.Adjudicator.Adjudicator
                    , Perun.Adjudicator.History

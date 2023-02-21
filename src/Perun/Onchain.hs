@@ -90,7 +90,7 @@ minAda :: Integer
 minAda = getLovelace minAdaTxOut
 
 newtype ChannelID = ChannelID BuiltinByteString
-  deriving (ToJSON, FromJSON, ToSchema, Eq, P.Eq) via BuiltinByteString
+  deriving (ToJSON, FromJSON, ToSchema, Eq, P.Eq, P.Ord) via BuiltinByteString
   deriving (Generic, Data)
 
 PlutusTx.unstableMakeIsData ''ChannelID
