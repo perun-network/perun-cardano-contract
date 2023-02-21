@@ -26,7 +26,6 @@ import Plutus.Contract
 import Plutus.Contract.Util (loopM)
 import qualified Plutus.Script.Utils.V1.Typed.Scripts as Typed
 import qualified Plutus.Script.Utils.V2.Typed.Scripts as Scripts
-import PlutusTx
 
 type AdjudicatorSchema =
   Endpoint "watch" ()
@@ -151,7 +150,7 @@ getAllOnChainEvents cid = do
       -- The channel was never created.
       return []
     handlePastEvents (ChannelTxPool ctxs) = do
-      events <- case generateHistory cid ctxs of
+      events <- case generateHistory ctxs of
         Left err -> throwing _SubscriptionError err
         Right hist -> return $ deduceEvents hist
       case events of
@@ -160,9 +159,9 @@ getAllOnChainEvents cid = do
 
 -- | generateHistory creates a history for the given ChannelID using tx from
 -- the given TxPool.
-generateHistory :: ChannelID -> [ChannelTx] -> Either SubscriptionException ChannelHistory
-generateHistory _cid [] = return ChannelNil
-generateHistory cid hist = do
+generateHistory :: [ChannelTx] -> Either SubscriptionException ChannelHistory
+generateHistory [] = return ChannelNil
+generateHistory hist = do
   -- channelGenesis should ALWAYS exist when we reach this path, otherwise
   -- the given history does not relate to a Perun channel, or something
   -- else went horribly wrong.
@@ -183,10 +182,9 @@ generateHistory cid hist = do
       ChannelTxFirst ->
       [ChannelTx] ->
       Either SubscriptionException ChannelHistory
-    traceChannelHistory genesisTx@(ChannelTx gCitx _ (_, genesisDatum)) txPool =
-      ChannelCreation genesisDatum <$> go (generalizeFirst genesisTx) txPool
+    traceChannelHistory genesisTx@(ChannelTx _ _ (_, genesisDatum)) origTxPool =
+      ChannelCreation genesisDatum <$> go (generalizeFirst genesisTx) origTxPool
       where
-        ourValidator = channelValidator cid
         go :: ChannelTx -> [ChannelTx] -> Either SubscriptionException ChannelHistory
         go _ [] = do
           -- No transactions in tx pool left, end of ChannelHistory.
@@ -200,10 +198,10 @@ generateHistory cid hist = do
               throwError DivergentChannelHistory
             Just tx -> return tx
           case next of
-            ChannelTx nCitx (Just (iRef, action, iChannelDatum)) (Just (oRef, oChannelDatum)) -> do
+            ChannelTx nCitx (Just (_iRef, action, _iChannelDatum)) (Just (_oRef, oChannelDatum)) -> do
               -- We have a channel update. Channel makes a step.
               ChannelStep action oChannelDatum <$> go next (filter (isNotThisTx nCitx) txPool)
-            ChannelTx nCitx (Just (iRef, action, iChannelDatum)) Nothing -> do
+            ChannelTx nCitx (Just (_iRef, action, iChannelDatum)) Nothing -> do
               -- We have a channel close. The transaction closing the channel
               -- has to reference the same state as the last state in the
               -- previous transaction.
@@ -215,17 +213,16 @@ generateHistory cid hist = do
               ChannelConclude action <$> go next (filter (isNotThisTx nCitx) txPool)
             -- nCitx has only a single ChannelDatum. Either the channel was
             -- concluded or we reached the local end of the ChannelHistory.
-            ChannelTx nCitx Nothing (Just _) -> do
+            ChannelTx _nCitx Nothing (Just _) -> do
               -- This is not possible, since the txPool should NOT contain the
               -- start of the channel when we reach this point.
               throwError CorruptedChainIndexErr
             _else -> do
               -- There is no next transaction but we still have txs left in the
-              -- txPool. This is not possible, since the txPool should NOT
-              -- contain the start of the channel when we reach this point.
+              -- txPool.
               throwError DivergentChannelHistory -- TODO: Use correct error here.
     isNextTx :: ChannelTx -> ChannelTx -> Bool
-    isNextTx (ChannelTx citx _ o) (ChannelTx nCitx ni _) =
+    isNextTx (ChannelTx _citx _ o) (ChannelTx _nCitx ni _) =
       let isNextTx' = do
             ref <- fst <$> o
             nRef <- fst3 <$> ni
