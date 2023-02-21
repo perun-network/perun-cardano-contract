@@ -178,7 +178,7 @@ generateHistory cid hist =
             return $ mkChannelGenesis ctx
           _else -> throwError CorruptedChainIndexErr
    in traceChannelHistory genesis . filter (isNotThisTx genesis) $ hist
-      where
+  where
     resolveDatum (citx, TxOutRef _ idx, _) = do
       output <- case citx ^. citxOutputs of
         InvalidTx -> throwError CorruptedChainIndexErr
@@ -214,14 +214,14 @@ generateHistory cid hist =
               -- has to reference the same state as the last state in the
               -- previous transaction.
               let isSameChannelDatum = do
-                cd <- ctx ^. channelTxOutRef . _Just . _2
-                return $ cd == iChannelDatum
+                    cd <- ctx ^. channelTxOutRef . _Just . _2
+                    return $ cd == iChannelDatum
               -- Throw an error if the channelstates do not match.
               unless (fromMaybe False isSameChannelDatum) $ throwError CorruptedChainIndexErr
               ChannelConclude action <$> go next (filter (isNotThisTx nCitx) txPool)
             -- nCitx has only a single ChannelDatum. Either the channel was
             -- concluded or we reached the local end of the ChannelHistory.
-            ChannelTx nCitx Nothing (Just _)  -> do
+            ChannelTx nCitx Nothing (Just _) -> do
               -- This is not possible, since the txPool should NOT contain the
               -- start of the channel when we reach this point.
               throwError CorruptedChainIndexErr
@@ -249,22 +249,22 @@ data ChannelHistory
 
 deduceEvents :: ChannelHistory -> [ChannelEvent]
 deduceEvents hist = go Nothing hist
-  where go _ ChannelNil = []
-        go _ (ChannelCreation d h) = Created d : go (Just d) h
-        go _ (ChannelStep Abort d h) = Concluded d : go (Just d) h
-        go _ (ChannelStep ForceClose d h) = Concluded d : go (Just d) h
-        go _ (ChannelStep (MkClose _) d h) = Concluded d : go (Just d) h
-        go (Just d') (ChannelStep Fund d h)  = mkDepositList d d' ++ go (Just d) h
-        go _ (ChannelStep (MkDispute _) d h) = Disputed d : go (Just d) h
-        -- We currently expect every participant to deposit for himself. The
-        -- resulting event list for deposits will always contain a single
-        -- element as long as this restriction is in place.
-        mkDepositList d d' =
-          let newFunding = d ^. funding
-              prevFunding = d' ^. funding
-              lenPrevFunding = length prevFunding
-           in [Deposited d' (fromIntegral lenPrevFunding) (drop lenPrevFunding newFunding)]
-
+  where
+    go _ ChannelNil = []
+    go _ (ChannelCreation d h) = Created d : go (Just d) h
+    go _ (ChannelStep Abort d h) = Concluded d : go (Just d) h
+    go _ (ChannelStep ForceClose d h) = Concluded d : go (Just d) h
+    go _ (ChannelStep (MkClose _) d h) = Concluded d : go (Just d) h
+    go (Just d') (ChannelStep Fund d h) = mkDepositList d d' ++ go (Just d) h
+    go _ (ChannelStep (MkDispute _) d h) = Disputed d : go (Just d) h
+    -- We currently expect every participant to deposit for himself. The
+    -- resulting event list for deposits will always contain a single
+    -- element as long as this restriction is in place.
+    mkDepositList d d' =
+      let newFunding = d ^. funding
+          prevFunding = d' ^. funding
+          lenPrevFunding = length prevFunding
+       in [Deposited d' (fromIntegral lenPrevFunding) (drop lenPrevFunding newFunding)]
 
 -- | datumFromTx returns the ChannelDatums for the given ChannelID contained
 -- in the given ChainIndexTx.
