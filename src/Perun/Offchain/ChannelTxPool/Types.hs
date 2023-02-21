@@ -1,3 +1,5 @@
+{-# LANGUAGE FunctionalDependencies #-}
+
 module Perun.Offchain.ChannelTxPool.Types where
 
 import Control.Lens.TH
@@ -68,4 +70,16 @@ pattern ChannelTxPool txs = ChannelTxPool_ txs
 pattern ChannelTx :: ChainIndexTx -> i -> o -> ChannelTxDynamic i o
 pattern ChannelTx citx txinref txoutref = ChannelTx_ citx txinref txoutref
 
-makeFields ''ChannelTxPool
+generalizeFirst :: ChannelTxFirst -> ChannelTx
+generalizeFirst (ChannelTx_ citx txinref txoutref) =
+  ChannelTx_ citx txinref (Just txoutref)
+
+generalizeStep :: ChannelTxStep -> ChannelTx
+generalizeStep (ChannelTx_ citx txinref txoutref) =
+  ChannelTx_ citx (Just txinref) (Just txoutref)
+
+generalizeLast :: ChannelTxLast -> ChannelTx
+generalizeLast (ChannelTx_ citx txinref txoutref) =
+  ChannelTx_ citx (Just txinref) txoutref
+
+makeFields ''ChannelTxDynamic

@@ -156,7 +156,7 @@ getAllOnChainEvents cid = do
       -- The channel was never created.
       return []
     handlePastEvents (ChannelTxPool ctxs) = do
-      case generateHistory cid refs of
+      case generateHistory cid ctxs of
         Left err -> throwing _SubscriptionError err
         Right hist -> return $ deduceEvents hist
 
@@ -164,36 +164,37 @@ getAllOnChainEvents cid = do
 -- the given TxPool.
 generateHistory :: ChannelID -> [ChannelTx] -> Either SubscriptionException ChannelHistory
 generateHistory _cid [] = return ChannelNil
-generateHistory cid hist =
-  let -- channelGenesis should ALWAYS exist when we reach this path, otherwise
-      -- the given history does not relate to a Perun channel, or something
-      -- else went horribly wrong.
-      channelGenesis = do
-        genesis <- case filter isChannelGenesis hist of
-          [] -> throwError CorruptedChainIndexErr
-          [ctx] -> do
-            -- We expect the resulting list to have exactly one element. If
-            -- there are mutiple channel genesis transactions, we are in the
-            -- realm of undefined behaviour.
-            return $ mkChannelGenesis ctx
-          _else -> throwError CorruptedChainIndexErr
-   in traceChannelHistory genesis . filter (isNotThisTx genesis) $ hist
+generateHistory cid hist = do
+  -- channelGenesis should ALWAYS exist when we reach this path, otherwise
+  -- the given history does not relate to a Perun channel, or something
+  -- else went horribly wrong.
+  genesis <- case filter isChannelGenesis hist of
+    [] -> throwError CorruptedChainIndexErr
+    [ctx] -> do
+      -- We expect the resulting list to have exactly one element. If
+      -- there are mutiple channel genesis transactions, we are in the
+      -- realm of undefined behaviour.
+      return $ mkChannelGenesis ctx
+    _else -> throwError CorruptedChainIndexErr
+  traceChannelHistory genesis . filter (isNotThisTx' $ generalizeFirst genesis) $ hist
   where
     resolveDatum (citx, TxOutRef _ idx, _) = do
       output <- case citx ^. citxOutputs of
         InvalidTx -> throwError CorruptedChainIndexErr
         ValidTx os -> Right $ os !! fromIntegral idx
       datumFromTx (citx, output)
-    isChannelGenesis (ChannelTx _ Nothing (Just (_ref, channelDatum))) = isRight channelDatum
+    isChannelGenesis :: ChannelTx -> Bool
+    isChannelGenesis (ChannelTx _ Nothing (Just _)) = True
     isChannelGenesis (ChannelTx _ i o) = False
     traceChannelHistory ::
       ChannelTxFirst ->
       [ChannelTx] ->
       Either SubscriptionException ChannelHistory
     traceChannelHistory genesisTx@(ChannelTx gCitx _ (_, genesisDatum)) txPool =
-      ChannelCreation genesisDatum <$> go genesisTx txPool
+      ChannelCreation genesisDatum <$> go (generalizeFirst genesisTx) txPool
       where
         ourValidator = channelValidator cid
+        go :: ChannelTx -> [ChannelTx] -> Either SubscriptionException ChannelHistory
         go _ [] = do
           -- No transactions in tx pool left, end of ChannelHistory.
           return ChannelNil
@@ -208,13 +209,13 @@ generateHistory cid hist =
           case next of
             ChannelTx nCitx (Just (iRef, action, iChannelDatum)) (Just (oRef, oChannelDatum)) -> do
               -- We have a channel update. Channel makes a step.
-              ChannelStep action <$> go next (filter (isNotThisTx nCitx) txPool)
+              ChannelStep action oChannelDatum <$> go next (filter (isNotThisTx nCitx) txPool)
             ChannelTx nCitx (Just (iRef, action, iChannelDatum)) Nothing -> do
               -- We have a channel close. The transaction closing the channel
               -- has to reference the same state as the last state in the
               -- previous transaction.
               let isSameChannelDatum = do
-                    cd <- ctx ^. channelTxOutRef . _Just . _2
+                    cd <- ctx ^? channelTxOutRef . _Just . _2
                     return $ cd == iChannelDatum
               -- Throw an error if the channelstates do not match.
               unless (fromMaybe False isSameChannelDatum) $ throwError CorruptedChainIndexErr
@@ -234,10 +235,15 @@ generateHistory cid hist =
     isNextTx (ChannelTx citx _ o) (ChannelTx nCitx ni _) =
       let isNextTx' = do
             ref <- fst <$> o
-            nRef <- fst <$> ni
+            nRef <- fst3 <$> ni
             return $ ref == nRef
        in fromMaybe False isNextTx'
-    isNotThisTx citx pCitx = (citx ^. channelcitx) /= (pCitx ^. channelcitx)
+    fst3 :: (a, b, c) -> a
+    fst3 (a, _, _) = a
+    isNotThisTx :: ChainIndexTx -> ChannelTx -> Bool
+    isNotThisTx citx pCitx = citx /= (pCitx ^. channelcitx)
+    isNotThisTx' :: ChannelTx -> ChannelTx -> Bool
+    isNotThisTx' citx = isNotThisTx (citx ^. channelcitx)
 
 -- | ChannelHistory describes the on-chain history of a Perun channel.
 data ChannelHistory
@@ -248,7 +254,7 @@ data ChannelHistory
   deriving (Show)
 
 deduceEvents :: ChannelHistory -> [ChannelEvent]
-deduceEvents hist = go Nothing hist
+deduceEvents = go Nothing
   where
     go _ ChannelNil = []
     go _ (ChannelCreation d h) = Created d : go (Just d) h
@@ -261,8 +267,8 @@ deduceEvents hist = go Nothing hist
     -- resulting event list for deposits will always contain a single
     -- element as long as this restriction is in place.
     mkDepositList d d' =
-      let newFunding = d ^. funding
-          prevFunding = d' ^. funding
+      let newFunding = funding d
+          prevFunding = funding d'
           lenPrevFunding = length prevFunding
        in [Deposited d' (fromIntegral lenPrevFunding) (drop lenPrevFunding newFunding)]
 
