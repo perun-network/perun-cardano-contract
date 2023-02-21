@@ -13,6 +13,7 @@ import Control.Lens
 import Data.Aeson
 import Data.Text (Text)
 import GHC.Generics (Generic)
+import Perun.Adjudicator.History
 import Plutus.Contract
 
 data PerunError
@@ -74,7 +75,8 @@ data SubscriptionException
   | UnexpectedNumberOfChannelUTXOsErr
   | DatumErr !DatumException
   | CorruptedChainIndexErr
-  | DivergentChannelHistories
+  | ImpossibleChannelHistory ChannelHistory
+  | DivergentChannelHistory
   | ContractEndedErr
   deriving (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
