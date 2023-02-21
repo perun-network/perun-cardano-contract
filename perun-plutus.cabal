@@ -90,6 +90,8 @@ library
     exposed-modules: Perun
                    , PAB
                    , Perun.Adjudicator
+                   , Perun.Adjudicator.Adjudicator
+                   , Perun.Adjudicator.History
                    , Perun.Error
                    , Perun.Offchain
                    , Perun.Onchain

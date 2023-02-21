@@ -67,8 +67,12 @@ data ChannelTxDynamic i o = ChannelTx_
 pattern ChannelTxPool :: [ChannelTx] -> ChannelTxPool
 pattern ChannelTxPool txs = ChannelTxPool_ txs
 
+{-# COMPLETE ChannelTxPool #-}
+
 pattern ChannelTx :: ChainIndexTx -> i -> o -> ChannelTxDynamic i o
 pattern ChannelTx citx txinref txoutref = ChannelTx_ citx txinref txoutref
+
+{-# COMPLETE ChannelTx #-}
 
 generalizeFirst :: ChannelTxFirst -> ChannelTx
 generalizeFirst (ChannelTx_ citx txinref txoutref) =
