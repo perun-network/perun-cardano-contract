@@ -1,4 +1,5 @@
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE DerivingVia #-}
 
 module Perun.Onchain
   ( Channel (..),
@@ -8,6 +9,7 @@ module Perun.Onchain
     ChannelDatum (..),
     ChannelTypes,
     ChannelID (..),
+    Action (..),
     minAda,
     isLegalOutValue,
     ensureKnownCurrencies,
@@ -22,10 +24,16 @@ module Perun.Onchain
     channelValidator,
     channelHash,
     channelAddress,
+    channelTokenSymbol,
+    channelTokenName,
+    channelTokenValue,
+    channelTokenValue',
+    mkChannelTokenMintingPolicy,
+    mkVersionedChannelTokenMintinPolicy,
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
+import Data.Aeson (FromJSON, ToJSON, Value (Bool))
 import Data.Data
 -- import qualified Ledger.Typed.Scripts as Scripts
 
@@ -33,6 +41,7 @@ import Data.Text (unpack)
 import GHC.Generics (Generic)
 import Ledger
   ( Address,
+    CurrencySymbol,
     DiffMilliSeconds (..),
     Extended (..),
     Interval (..),
@@ -56,7 +65,8 @@ import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
 import Ledger.Scripts hiding (version)
 import Ledger.Scripts.Orphans ()
-import Ledger.Value (geq)
+import Ledger.Value (AssetClass(..), TokenName (..), assetClassValueOf, geq)
+import qualified Ledger.Value as Value
 import Playground.Contract (ensureKnownCurrencies, printJson, printSchemas, stage)
 import Plutus.Contract.Oracle (SignedMessage, verifySignedMessageConstraints)
 import Plutus.Script.Utils.V2.Address (mkValidatorAddress)
@@ -67,8 +77,11 @@ import Plutus.V2.Ledger.Contexts
     TxInInfo (..),
     TxInfo (..),
     TxOut (..),
+    TxOutRef (..),
     findDatum,
     getContinuingOutputs,
+    ownCurrencySymbol,
+    spendsOutput,
     txSignedBy,
   )
 import Plutus.V2.Ledger.Tx
@@ -167,6 +180,7 @@ PlutusTx.makeLift ''ChannelAction
 -- Datum datatype
 data ChannelDatum = ChannelDatum
   { channelParameters :: !Channel,
+    channelToken :: !Value.AssetClass,
     state :: !ChannelState,
     time :: !POSIXTime,
     funding :: ![Integer],
@@ -268,18 +282,24 @@ mkChannelValidator cID oldDatum action ctx =
           traceIfFalse "violated channel integrity" channelIntegrityAtFunding,
           -- check that the channel is marked as funded iff it is actually funded
           -- the channel is funded iff the funding reflects the state in the output datum
-          traceIfFalse "funded flag incorrect in output datum" checkFundingStatus
+          traceIfFalse "funded flag incorrect in output datum" checkFundingStatus,
+          -- check that the integrity of the threadToken field in the ChannelDatum is not violated
+          traceIfFalse "invalid threadToken field in output datum" keepsThreadTokenField,
+          -- check that the channel output keeps the thread token
+          traceIfFalse "channel output does own threadToken" keepsThreadToken
         ]
     Abort ->
-      -- no aborts on funded channels
-      traceIfFalse "channel is already funded" (not $ funded oldDatum)
-        &&
-        -- check the authenticity of the abort to prevent DOS
-        traceIfFalse "abort must be issued by channel participant" (any (txSignedBy info . unPaymentPubKeyHash) (pPaymentPKs $ channelParameters oldDatum))
-        && traceIfFalse "wrong input funding" correctInputFunding
-        &&
-        -- check that every party gets their funding refunded
-        traceIfFalse "A party was not reimbursed correctly for their funding" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (map (payoutForPk (funding oldDatum)) (pPaymentPKs (channelParameters oldDatum)))))
+      and
+        [ -- no aborts on funded channels
+          traceIfFalse "channel is already funded" (not $ funded oldDatum),
+          -- check the authenticity of the abort to prevent DOS
+          traceIfFalse "abort must be issued by channel participant" (any (txSignedBy info . unPaymentPubKeyHash) (pPaymentPKs $ channelParameters oldDatum)),
+          traceIfFalse "wrong input funding" correctInputFunding,
+          -- check that every party gets their funding refunded
+          traceIfFalse "a party was not reimbursed correctly for their funding" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (map (payoutForPk (funding oldDatum)) (pPaymentPKs (channelParameters oldDatum))))),
+          -- check that the thread token is burned
+          traceIfFalse "the thread token is not burned on abort" burnsThreadToken
+        ]
     -- Dispute Case:
     MkDispute st ->
       let newState = extractVerifiedState st (pSigningPKs $ channelParameters oldDatum)
@@ -300,33 +320,48 @@ mkChannelValidator cID oldDatum action ctx =
               -- check that the time in the output datum is set properly
               traceIfFalse "invalid time in output datum" (allowedValidRangeSize && outputTimeInValidRange),
               -- check that the channel is marked as disputed
-              traceIfFalse "failed to mark channel as disputed" (disputed outputDatum)
+              traceIfFalse "failed to mark channel as disputed" (disputed outputDatum),
+              -- check that the integrity of the threadToken field in the ChannelDatum is not violated
+              traceIfFalse "invalid threadToken field in output datum" keepsThreadTokenField,
+              -- check that the channel output keeps the thread token
+              traceIfFalse "channel output does own threadToken" keepsThreadToken
             ]
     -- Close Case:
     MkClose st ->
-      traceIfFalse "wrong input value" correctInputValue
-        && traceIfFalse "old state must be funded" (funded oldDatum)
-        && let newState = extractVerifiedState st (pSigningPKs $ channelParameters oldDatum)
-            in traceIfFalse "Closing state does not belong to this channel" (cID == channelId newState)
-                 &&
-                 -- check that the state is final
-                 traceIfFalse "The closing state is not final" (final newState)
-                 &&
-                 -- check that A receives their balance
-                 traceIfFalse "A party did not get their balance" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (map (payoutForPk (balances newState)) (pPaymentPKs (channelParameters oldDatum)))))
+      and
+        [ traceIfFalse "wrong input value" correctInputValue,
+          -- check that the close was issued on a funded state
+          traceIfFalse "old state must be funded" (funded oldDatum),
+          -- check that the thread token is burned
+          traceIfFalse "the thread token is not burned on close" burnsThreadToken,
+          let newState = extractVerifiedState st (pSigningPKs $ channelParameters oldDatum)
+           in and
+                [ traceIfFalse "Closing state does not belong to this channel" (cID == channelId newState),
+                  -- check that the state is final
+                  traceIfFalse "The closing state is not final" (final newState),
+                  -- check that A receives their balance
+                  traceIfFalse
+                    "a party did not get their balance"
+                    (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (map (payoutForPk (balances newState)) (pPaymentPKs (channelParameters oldDatum)))))
+                ]
+        ]
     -- ForceClose Case:
     ForceClose ->
-      traceIfFalse "wrong input value" correctInputValue
-        && traceIfFalse "old state must be funded" (funded oldDatum)
-        &&
-        -- check that there was a prior dispute
-        traceIfFalse "try to force close without prior dispute" (disputed oldDatum)
-        &&
-        -- check that the relative time-lock is past
-        traceIfFalse "too early" correctForceCloseSlotRange
-        &&
-        -- check that A receives their balance
-        traceIfFalse "A party did not get their balance" (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (map (payoutForPk (balances oldState)) (pPaymentPKs (channelParameters oldDatum)))))
+      and
+        [ traceIfFalse "wrong input value" correctInputValue,
+          -- check that the force close was issued on a funded state
+          traceIfFalse "old state must be funded" (funded oldDatum),
+          -- check that there was a prior dispute
+          traceIfFalse "try to force close without prior dispute" (disputed oldDatum),
+          -- check that the relative time-lock is past
+          traceIfFalse "too early" correctForceCloseSlotRange,
+          -- check that the thread token is burned
+          traceIfFalse "the thread token is not burned on force close" burnsThreadToken,
+          -- check that A receives their balance
+          traceIfFalse
+            "a party did not get their balance"
+            (all (== True) (zipWith getsValue (pPaymentPKs (channelParameters oldDatum)) (map (payoutForPk (balances oldState)) (pPaymentPKs (channelParameters oldDatum)))))
+        ]
   where
     info :: TxInfo
     info = scriptContextTxInfo ctx
@@ -341,7 +376,7 @@ mkChannelValidator cID oldDatum action ctx =
             [i] -> i
             _otherwise -> traceError "expected exactly one script input"
 
-    inVal :: Value
+    inVal :: Value.Value
     inVal = txOutValue . txInInfoResolved $ input
 
     oldState :: ChannelState
@@ -433,6 +468,24 @@ mkChannelValidator cID oldDatum action ctx =
               in sum (map txOutValue outputsForParty) `geq` Ada.lovelaceValueOf v
            )
 
+    --hasThreadToken :: TxOut -> Bool
+    --hasThreadToken o = case assetClassValueOf (txOutValue o) (threadToken oldDatum) of
+    --  0 -> False
+    --  1 -> True
+    --  _else -> traceError "more than one ThreadToken in an output"
+
+    hasThreadToken :: TxOut -> Bool
+    hasThreadToken o = assetClassValueOf (txOutValue o) (channelToken oldDatum) == 1
+
+    keepsThreadTokenField :: Bool
+    keepsThreadTokenField = channelToken outputDatum == channelToken oldDatum
+
+    keepsThreadToken :: Bool
+    keepsThreadToken = hasThreadToken ownOutput
+
+    burnsThreadToken :: Bool
+    burnsThreadToken = all (not . hasThreadToken) (txInfoOutputs info)
+
 --
 -- COMPILATION TO PLUTUS CORE
 --
@@ -454,3 +507,77 @@ channelHash = Scripts.validatorHash . channelValidator
 
 channelAddress :: ChannelID -> Address
 channelAddress = mkValidatorAddress . channelValidator
+
+data Action = Mint | Burn
+  deriving (P.Eq, P.Show)
+
+instance Eq Action where
+  {-# INLINEABLE (==) #-}
+  Mint == Mint = True
+  Burn == Burn = True
+  _ == _ = False
+
+PlutusTx.makeIsDataIndexed ''Action [('Mint, 0), ('Burn, 1)]
+PlutusTx.makeLift ''Action
+
+{-# INLINEABLE mkChannelTokenPolicy #-}
+mkChannelTokenPolicy :: TxOutRef -> (ValidatorHash, Action) -> ScriptContext -> Bool
+mkChannelTokenPolicy (TxOutRef refHash refIdx) (vHash, action) ctx@ScriptContext {scriptContextTxInfo = txinfo} =
+  let ownSymbol = ownCurrencySymbol ctx
+
+      minted = txInfoMint txinfo
+      expected = if action == Burn then -1 else 1
+
+      -- True if the pending transaction mints the amount of
+      -- currency that we expect
+      mintOK =
+        let v = checkThreadTokenInner ownSymbol vHash minted expected
+         in traceIfFalse "S7" {-"Value minted different from expected"-} v
+
+      -- True if the pending transaction spends the output
+      -- identified by @(refHash, refIdx)@
+      txOutputSpent =
+        let v = spendsOutput txinfo refHash refIdx
+         in traceIfFalse "S8" {-"Pending transaction does not spend the designated transaction output"-} v
+   in mintOK && (if action == Mint then txOutputSpent else True)
+
+--data PolicyTypes
+
+--instance Scripts.ValidatorTypes PolicyTypes where
+--  type RedeemerType PolicyTypes = (ValidatorHash, Action)
+--
+--ttMintingPolicy :: TxOutRef -> MintingPolicy
+--ttMintingPolicy outRef =
+-- mkMintingPolicyScript
+--    $$(PlutusTx.compile [||mkTTPolicy||])
+--    $$(PlutusTx.compile [||wrap||])
+--  where
+--    wrap = Scripts.mkUntypedMintingPolicy @(ValidatorHash, Action)
+
+mkChannelTokenMintingPolicy :: TxOutRef -> MintingPolicy
+mkChannelTokenMintingPolicy oref =
+  mkMintingPolicyScript $
+    $$(PlutusTx.compile [||wrap . mkChannelTokenPolicy||])
+      `PlutusTx.applyCode` PlutusTx.liftCode oref
+  where
+    wrap = Scripts.mkUntypedMintingPolicy @(ValidatorHash, Action)
+
+mkVersionedChannelTokenMintinPolicy :: TxOutRef -> Versioned MintingPolicy
+mkVersionedChannelTokenMintinPolicy oref = Versioned (mkChannelTokenMintingPolicy oref) PlutusV2 
+
+channelTokenSymbol :: TxOutRef -> CurrencySymbol
+channelTokenSymbol oref = scriptCurrencySymbol $ mkVersionedChannelTokenMintinPolicy oref
+
+channelTokenName :: ValidatorHash -> TokenName
+channelTokenName (ValidatorHash h) = TokenName h
+
+{-# INLINEABLE checkThreadTokenInner #-}
+checkThreadTokenInner :: CurrencySymbol -> ValidatorHash -> Value.Value -> Integer -> Bool
+checkThreadTokenInner symbol (ValidatorHash vHash) vl i =
+  Value.valueOf vl symbol (TokenName vHash) == i
+
+channelTokenValue :: CurrencySymbol -> TokenName -> Value.Value
+channelTokenValue symbol name = Value.singleton symbol name 1
+
+channelTokenValue' :: AssetClass -> Value.Value
+channelTokenValue' (AssetClass (s, t)) = channelTokenValue s t

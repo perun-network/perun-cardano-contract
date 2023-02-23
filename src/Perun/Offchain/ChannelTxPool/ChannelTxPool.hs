@@ -181,7 +181,7 @@ resolveOutput cid citx = do
             throwError ChannelCorruptedChainIndexErr
           Just d -> return d
         OutputDatum d -> return d
-      unless (hasThreadToken $ citoValue citxOut) $ throwError WrongThreadTokenErr
+      --unless (hasThreadToken $ citoValue citxOut) $ throwError WrongThreadTokenErr
       (txOutRef,) <$> channelDatumFromDatum d
     -- TODO: Finish. This is a placeholder for the thread token check.
     hasThreadToken :: Value -> Bool

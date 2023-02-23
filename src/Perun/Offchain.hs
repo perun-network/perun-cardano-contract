@@ -1,4 +1,6 @@
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Redundant bracket" #-}
 
 module Perun.Offchain where
 
@@ -17,6 +19,7 @@ import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
 import Ledger.Constraints.OffChain ()
 import qualified Ledger.Scripts as S
+import Ledger.Value (TokenName (..), assetClass)
 import Perun.Error
 import Perun.Onchain
 import Plutus.ChainIndex.Types hiding (ChainIndexTxOut)
@@ -27,6 +30,7 @@ import Plutus.Contract.Util (loopM)
 import qualified Plutus.Script.Utils.V1.Typed.Scripts as Typed
 import qualified Plutus.Script.Utils.V2.Typed.Scripts as Scripts
 import Plutus.V2.Ledger.Api (BuiltinByteString, ToData (toBuiltinData))
+import Plutus.Contract.Wallet (getUnspentOutput)
 import qualified PlutusTx
 import PlutusTx.Prelude hiding (unless)
 import Schema (ToSchema)
@@ -62,9 +66,8 @@ data FundParams = FundParams
   deriving (Generic, ToJSON, FromJSON, ToSchema)
   deriving stock (P.Eq, P.Show)
 
-newtype AbortParams = AbortParams ChannelID
-  deriving newtype (ToJSON, FromJSON, ToSchema)
-  deriving (Generic)
+data AbortParams = AbortParams ChannelID TxOutRef
+  deriving (Generic, ToJSON, FromJSON, ToSchema)
   deriving stock (P.Eq, P.Show)
 
 data DisputeParams = DisputeParams
@@ -94,8 +97,6 @@ type ChannelSchema =
     .\/ Endpoint "dispute" DisputeParams
     .\/ Endpoint "close" CloseParams
     .\/ Endpoint "forceClose" ForceCloseParams
-    .\/ Endpoint "dummy" ChannelID
-    .\/ Endpoint "dummyPayment" PaymentPubKeyHash
 
 --
 -- open channel
@@ -108,7 +109,12 @@ start ::
 start OpenParams {..} = do
   unless (all isLegalOutValue spBalances) . throwing_ $ _InsufficientMinimumAdaBalanceError
   now <- currentTime
-  let c =
+  ref <- getUnspentOutput
+  let symbol = channelTokenSymbol ref
+      hash = channelHash spChannelId
+      name = channelTokenName hash
+      token = assetClass symbol name
+      c =
         Channel
           { pTimeLock = spTimeLock,
             pSigningPKs = spSigningPKs,
@@ -125,15 +131,18 @@ start OpenParams {..} = do
       d =
         ChannelDatum
           { channelParameters = c,
+            channelToken = token,
             state = s,
             time = now + 1,
             funding = head spBalances : tail (map (const 0) spBalances),
             funded = False,
             disputed = False
           }
-      v = Ada.lovelaceValueOf $ head spBalances
-      tx = Constraints.mustPayToTheScript d v
-  ledgerTx <- submitTxConstraints (typedChannelValidator spChannelId) tx
+      tokenVal = channelTokenValue symbol name
+      v = Ada.lovelaceValueOf (head spBalances) <> tokenVal
+      lookups = Constraints.typedValidatorLookups (typedChannelValidator spChannelId) P.<> Constraints.plutusV2OtherScript (channelValidator $ spChannelId) P.<> Constraints.mintingPolicy (mkVersionedChannelTokenMintinPolicy ref)
+      tx = Constraints.mustPayToTheScript d v <> Constraints.mustMintValueWithRedeemer (Redeemer (PlutusTx.toBuiltinData (hash, Perun.Onchain.Mint))) tokenVal <> Constraints.mustSpendPubKeyOutput ref
+  ledgerTx <- submitTxConstraintsWith lookups tx
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $ printf "Started funding for channel %s with parameters %s and value %s" (P.show spChannelId) (P.show c) (P.show v)
 
@@ -155,7 +164,7 @@ fund FundParams {..} = do
           { funding = newFunding,
             funded = newFunding == balances state
           }
-      v = Ada.lovelaceValueOf (sum newFunding)
+      v = Ada.lovelaceValueOf (sum newFunding) <> channelTokenValue' channelToken
       r = Redeemer (PlutusTx.toBuiltinData Fund)
 
       lookups =
@@ -175,20 +184,23 @@ abort ::
   (AsPerunError e, AsContractError e) =>
   AbortParams ->
   Contract w s e ()
-abort (AbortParams cId) = do
+abort (AbortParams cId ref) = do
   (oref, o, d@ChannelDatum {..}) <- findChannelWithSync cId
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   -- TODO: This still gives the potential to lock a channel?
   unless (all isLegalOutValue funding) . throwing_ $ _InsufficientMinimumAdaBalanceError
   when funded . throwing_ $ _AlreadyFundedAbortError
   let r = Redeemer (PlutusTx.toBuiltinData Abort)
+      hash = channelHash cId
       lookups =
         Constraints.typedValidatorLookups (typedChannelValidator cId)
           P.<> Constraints.plutusV2OtherScript (channelValidator cId)
           P.<> Constraints.unspentOutputs (Map.singleton oref o)
+          P.<> (Constraints.mintingPolicy (mkVersionedChannelTokenMintinPolicy ref))
       tx =
         mconcat (zipWith Constraints.mustPayToPubKey (pPaymentPKs channelParameters) (map Ada.lovelaceValueOf funding))
           <> Constraints.mustSpendScriptOutput oref r
+          <> (Constraints.mustMintValueWithRedeemer (Redeemer (PlutusTx.toBuiltinData (hash, Perun.Onchain.Burn))) (channelTokenValue' channelToken))
   ledgerTx <- submitTxConstraintsWith lookups tx
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $
@@ -206,7 +218,12 @@ open ::
 open OpenParams {..} = do
   unless (all isLegalOutValue spBalances) . throwing_ $ _InsufficientMinimumAdaBalanceError
   t <- currentTime
-  let c =
+  ref <- getUnspentOutput
+  let symbol = channelTokenSymbol ref
+      hash = channelHash spChannelId
+      name = channelTokenName hash
+      token = assetClass symbol name
+      c =
         Channel
           { pTimeLock = spTimeLock,
             pSigningPKs = spSigningPKs,
@@ -223,14 +240,18 @@ open OpenParams {..} = do
       d =
         ChannelDatum
           { channelParameters = c,
+            channelToken = token,
             state = s,
             time = t,
             funding = [],
             funded = True,
             disputed = False
           }
-      v = Ada.lovelaceValueOf $ sum spBalances
-      tx = Constraints.mustPayToTheScript d v
+      tokenVal = channelTokenValue symbol name
+      v = Ada.lovelaceValueOf (sum spBalances) <> tokenVal
+      lookups = (Constraints.typedValidatorLookups (typedChannelValidator spChannelId)) P.<> Constraints.plutusV2OtherScript (channelValidator spChannelId) P.<> (Constraints.mintingPolicy (mkVersionedChannelTokenMintinPolicy ref))
+
+      tx = (Constraints.mustPayToTheScript d v) <> (Constraints.mustMintValueWithRedeemer (Redeemer (PlutusTx.toBuiltinData (hash, Perun.Onchain.Mint))) tokenVal) <> Constraints.mustSpendPubKeyOutput ref
   ledgerTx <- submitTxConstraints (typedChannelValidator spChannelId) tx
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   logInfo @P.String $ printf "Opened channel %s with parameters %s and value %s" (P.show spChannelId) (P.show c) (P.show v)
