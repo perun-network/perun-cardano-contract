@@ -25,6 +25,7 @@ module Multi
     MultiClientError (..),
     runMultiClientWith,
     delayAll,
+    withChannel,
     callEndpointFor,
     actionBy,
     subscribeToContractEvents,
@@ -49,8 +50,11 @@ import Data.Proxy
 import Data.Text (pack)
 import GHC.TypeLits
 import Perun.Onchain
+import Perun.Offchain (AllSignedStates (..))
 import Servant.Client
 import Websocket
+import Perun (OpenParams)
+import Plutus.PAB.Core.ContractInstance.STM (observableContractState)
 
 newtype MultiClientState = MultiClientState
   { _multiClientStateActors :: Map.Map String PerunClientState
@@ -59,7 +63,8 @@ newtype MultiClientState = MultiClientState
 makeFields ''MultiClientState
 
 data MultiClientError
-  = MultiClientImpossibleLookupErr
+  = MultiClientNoObservableStateError 
+  | MultiClientImpossibleLookupErr
   | MultiClientEndpointErr !ClientError
   deriving (Show)
 
@@ -83,6 +88,16 @@ runMultiClientWith creds action = do
     res <- flip evalStateT (MultiClientState actorStates) . runExceptT . unMultiClient $ action
     logInfo "MultiClient trace done."
     return res
+
+withChannel :: forall actor actors a. (HasActor actor actors) => OpenParams -> (ChannelToken -> MultiClient actors a) -> MultiClient actors a
+withChannel openParams action = do
+  callEndpointFor @actor "start" openParams
+  ct <- actionBy @actor getObservableState >>= \case
+    Nothing -> throwError MultiClientNoObservableStateError
+    Just ct -> return ct
+  action ct
+
+    
 
 delayAll :: Int -> MultiClient actors ()
 delayAll ms = do
@@ -122,8 +137,8 @@ subscribeAdjudicator cID = actionBy @actor $ do
   clientState <- get
   void . liftIO . async $ runAdjudicatorForClient clientState cID
 
-update :: forall actors. (SymbolList actors) => ChannelState -> MultiClient actors SignedState
-update newState = SignedState <$> (mapAllClients @actors $ signState newState)
+update :: forall actors. (SymbolList actors) => ChannelState -> MultiClient actors AllSignedStates
+update newState = AllSignedStates <$> (mapAllClients @actors $ signState newState)
 
 mapAllClients :: forall actors a. (SymbolList actors) => PerunClient a -> MultiClient actors [a]
 mapAllClients action = do

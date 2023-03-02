@@ -28,7 +28,7 @@ import Options.Applicative hiding (Success)
 import Options.Applicative.Types
 import Perun (DisputeParams (..), ForceCloseParams (..), FundParams (..))
 import Perun.Offchain (OpenParams (..), getChannelId)
-import Perun.Onchain (Channel (..), ChannelState (..))
+import Perun.Onchain (Channel (..), ChannelState (..), channelTokenAsset)
 import Plutus.PAB.Types (Config (..), WebserverConfig (..), defaultWebServerConfig)
 import Servant.Client.Core.BaseUrl (BaseUrl (..), Scheme (..))
 import System.Random.Stateful
@@ -147,30 +147,29 @@ main' (CLA aliceWallet bobWallet network) = do
               spNonce = nonce
             }
 
-        fundParams =
-          FundParams channelId 1
-
-        stateV1 = ChannelState channelId [defaultBalance `div` 2, (defaultBalance `div` 2) * 3] 1 False
-        change = defaultBalance `div` 4
-        stateV2 = ChannelState channelId [defaultBalance + change, defaultBalance - change] 2 False
-        forceCloseParams = ForceCloseParams channelId
-
     subscribeAdjudicator @"alice" channelId
-    signedStateV1 <- update stateV1
-    signedStateV2 <- update stateV2
-    let disputeBobParams = DisputeParams signingPKs signedStateV1
-        disputeAliceParams = DisputeParams signingPKs signedStateV2
+
 
     -- Trace definition.
-    callEndpointFor @"alice" "start" startParams
-    delayAll 15_000_000
-    callEndpointFor @"bob" "fund" fundParams
-    delayAll 30_000_000
-    callEndpointFor @"bob" "dispute" disputeBobParams
-    delayAll 30_000_000
-    callEndpointFor @"alice" "dispute" disputeAliceParams
-    delayAll . fromIntegral $ defaultTimeLock * 1000 + (10 * 1000 * 1000)
-    callEndpointFor @"alice" "forceClose" forceCloseParams
+    withChannel @"alice" startParams $ \ct -> do
+      let ctAsset = channelTokenAsset ct
+          fundParams = FundParams channelId ctAsset 1
+          stateV1 = ChannelState channelId [defaultBalance `div` 2, (defaultBalance `div` 2) * 3] 1 False
+          change = defaultBalance `div` 4
+          stateV2 = ChannelState channelId [defaultBalance + change, defaultBalance - change] 2 False
+          forceCloseParams = ForceCloseParams channelId ctAsset
+      signedStateV1 <- update stateV1
+      signedStateV2 <- update stateV2
+      let disputeBobParams = DisputeParams channelId ctAsset signingPKs signedStateV1
+          disputeAliceParams = DisputeParams channelId ctAsset signingPKs signedStateV2
+      delayAll 15_000_000
+      callEndpointFor @"bob" "fund" fundParams
+      delayAll 30_000_000
+      callEndpointFor @"bob" "dispute" disputeBobParams
+      delayAll 30_000_000
+      callEndpointFor @"alice" "dispute" disputeAliceParams
+      delayAll . fromIntegral $ defaultTimeLock * 1000 + (10 * 1000 * 1000)
+      callEndpointFor @"alice" "forceClose" forceCloseParams
   return ()
 
 alicePhrase :: [Text]
