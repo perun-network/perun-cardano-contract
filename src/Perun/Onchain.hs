@@ -1,5 +1,7 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE DerivingVia #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 
 module Perun.Onchain
   ( Channel (..),
@@ -9,6 +11,7 @@ module Perun.Onchain
     ChannelDatum (..),
     ChannelTypes,
     ChannelID (..),
+    ChannelToken (..),
     Action (..),
     minAda,
     isLegalOutValue,
@@ -24,10 +27,12 @@ module Perun.Onchain
     channelValidator,
     channelHash,
     channelAddress,
+    channelTokenAsset,
     channelTokenSymbol,
     channelTokenName,
     channelTokenValue,
     channelTokenValue',
+    channelTokenValue'',
     mkChannelTokenMintingPolicy,
     mkVersionedChannelTokenMintinPolicy,
   )
@@ -65,10 +70,10 @@ import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
 import Ledger.Scripts hiding (version)
 import Ledger.Scripts.Orphans ()
-import Ledger.Value (AssetClass(..), TokenName (..), assetClassValueOf, geq)
+import Ledger.Value (AssetClass(..), TokenName (..), assetClassValueOf, assetClass, geq)
 import qualified Ledger.Value as Value
 import Playground.Contract (ensureKnownCurrencies, printJson, printSchemas, stage)
-import Plutus.Contract.Oracle (SignedMessage, verifySignedMessageConstraints)
+import Plutus.Contract.Oracle (SignedMessage (..), verifySignedMessageConstraints)
 import Plutus.Script.Utils.V2.Address (mkValidatorAddress)
 import qualified Plutus.Script.Utils.V2.Scripts as Scripts
 import qualified Plutus.Script.Utils.V2.Typed.Scripts as Scripts hiding (validatorHash)
@@ -86,12 +91,14 @@ import Plutus.V2.Ledger.Contexts
   )
 import Plutus.V2.Ledger.Tx
   ( OutputDatum (..),
+    TxId (..),
   )
 import qualified PlutusTx
 import PlutusTx.Prelude hiding (unless)
 import Schema (FormSchema (..), ToSchema (..))
 import Text.Hex (encodeHex)
 import qualified Prelude as P
+import Plutus.Contract.StateMachine.ThreadToken (threadTokenValue)
 
 --
 --
@@ -111,6 +118,46 @@ PlutusTx.makeLift ''ChannelID
 
 instance P.Show ChannelID where
   show (ChannelID cid) = unpack . encodeHex $ fromBuiltin cid
+
+
+data ChannelToken = ChannelToken
+  { 
+    ctSymbol :: CurrencySymbol,
+    ctName :: TokenName,
+    ctTxOutRef :: !TxOutRef
+  }
+  deriving (Data, Generic, ToJSON, FromJSON, ToSchema, P.Eq, P.Show)
+
+deriving instance Data TxId
+
+deriving instance Data TxOutRef
+  
+instance Eq ChannelToken where
+  {-# INLINEABLE (==) #-}
+  a == b =
+    ctSymbol a == ctSymbol b
+      && ctName a == ctName b
+      && ctTxOutRef a == ctTxOutRef b
+
+PlutusTx.unstableMakeIsData ''ChannelToken
+PlutusTx.makeLift ''ChannelToken
+
+{-# INLINEABLE channelTokenAsset #-}
+channelTokenAsset :: ChannelToken -> AssetClass
+channelTokenAsset ct = assetClass (ctSymbol ct) (ctName ct)
+
+{-# INLINEABLE channelTokenValue #-}
+channelTokenValue :: CurrencySymbol -> TokenName -> Value.Value
+channelTokenValue symbol name = Value.singleton symbol name 1
+
+{-# INLINEABLE channelTokenValue' #-}
+channelTokenValue' :: ChannelToken -> Value.Value
+channelTokenValue' (ChannelToken s t _) = channelTokenValue s t
+
+{-# INLINEABLE channelTokenValue'' #-}
+channelTokenValue'' :: AssetClass -> Value.Value
+channelTokenValue'' (AssetClass (symbol, name)) = channelTokenValue symbol name
+
 
 -- Parameters of the channel
 data Channel = Channel
@@ -153,19 +200,22 @@ instance Eq ChannelState where
 PlutusTx.unstableMakeIsData ''ChannelState
 PlutusTx.makeLift ''ChannelState
 
-newtype SignedState = SignedState
-  { stateSigs :: [SignedMessage ChannelState]
+data SignedState = SignedState
+  { sigs :: [Signature],
+    datumHash :: DatumHash,
+    channelState :: !ChannelState
   }
-  deriving (Generic)
-  deriving newtype (ToJSON, FromJSON)
+  deriving (Generic, ToJSON, FromJSON)
   deriving stock (P.Eq, P.Show)
 
 instance Eq SignedState where
   {-# INLINEABLE (==) #-}
-  a == b = stateSigs a == stateSigs b
+  a == b = sigs a == sigs b && 
+            channelState a == channelState b
+            -- TODO: datumHash a == datumHash b
 
-instance ToSchema SignedState where
-  toSchema = FormSchemaArray (toSchema @(Signature, (DatumHash, ChannelState)))
+instance ToSchema (SignedMessage ChannelState) where
+  toSchema = toSchema @(Signature, (DatumHash, ChannelState))
 
 PlutusTx.unstableMakeIsData ''SignedState
 PlutusTx.makeLift ''SignedState
@@ -180,7 +230,7 @@ PlutusTx.makeLift ''ChannelAction
 -- Datum datatype
 data ChannelDatum = ChannelDatum
   { channelParameters :: !Channel,
-    channelToken :: !Value.AssetClass,
+    channelToken :: !ChannelToken,
     state :: !ChannelState,
     time :: !POSIXTime,
     funding :: ![Integer],
@@ -228,12 +278,12 @@ isValidStateTransition old new =
 -- public key in the correct order. It throws an error otherwise.
 {-# INLINEABLE extractVerifiedState #-}
 extractVerifiedState :: SignedState -> [PaymentPubKey] -> ChannelState
-extractVerifiedState (SignedState sigs) signingKeys =
+extractVerifiedState (SignedState sigs dh cs) signingKeys =
   let states =
         zipWithEqualLength
           verifySignedMessageConstraints'
           signingKeys
-          sigs
+          (map (\sig -> SignedMessage sig dh (Datum $ PlutusTx.toBuiltinData cs)) sigs)
           "list of signature and list of keys have different lengths"
    in if and $ PlutusTx.Prelude.map (== head states) (tail states)
         then
@@ -313,7 +363,7 @@ mkChannelValidator cID oldDatum action ctx =
               traceIfFalse "invalid state transition" (isValidStateTransition oldState (state outputDatum)),
               -- check that the channel id in the state in the dispute matches the actual channel id
               traceIfFalse "state in dispute does not belong to this channel" (channelId (state outputDatum) == cID),
-              -- check that the channel funding is maintained. This also checks the integrity of the channel script
+              -- check that the channel value is maintained. This also checks the integrity of the channel script
               traceIfFalse "wrong output value" correctChannelValue,
               -- check that the channel parameters stay the same
               traceIfFalse "channel parameters differ" (channelParameters oldDatum == channelParameters outputDatum),
@@ -383,10 +433,11 @@ mkChannelValidator cID oldDatum action ctx =
     oldState = state oldDatum
 
     correctInputValue :: Bool
-    correctInputValue = inVal == Ada.lovelaceValueOf (sum $ balances oldState)
+    correctInputValue = inVal == (Ada.lovelaceValueOf (sum $ balances oldState) <> channelTokenValue' (channelToken oldDatum))
 
     correctInputFunding :: Bool
-    correctInputFunding = inVal == Ada.lovelaceValueOf (sum $ funding oldDatum)
+    correctInputFunding = inVal == (Ada.lovelaceValueOf (sum $ funding oldDatum) <> channelTokenValue' (channelToken oldDatum))
+
 
     resolveDatumTarget :: TxOut -> BuiltinData -> (TxOut, ChannelDatum)
     resolveDatumTarget o d = case PlutusTx.fromBuiltinData d of
@@ -413,11 +464,11 @@ mkChannelValidator cID oldDatum action ctx =
 
     correctChannelValue :: Bool
     correctChannelValue =
-      txOutValue ownOutput == Ada.lovelaceValueOf (sum $ balances oldState)
+      txOutValue ownOutput == (Ada.lovelaceValueOf (sum $ balances oldState) <> channelTokenValue' (channelToken oldDatum))
 
     correctChannelFunding :: Bool
     correctChannelFunding =
-      txOutValue ownOutput == Ada.lovelaceValueOf (sum $ funding outputDatum)
+      txOutValue ownOutput == (Ada.lovelaceValueOf (sum $ funding outputDatum) <> channelTokenValue' (channelToken oldDatum))
 
     checkFundingStatus :: Bool
     checkFundingStatus = (funding outputDatum == balances (state outputDatum)) == funded outputDatum
@@ -475,7 +526,7 @@ mkChannelValidator cID oldDatum action ctx =
     --  _else -> traceError "more than one ThreadToken in an output"
 
     hasThreadToken :: TxOut -> Bool
-    hasThreadToken o = assetClassValueOf (txOutValue o) (channelToken oldDatum) == 1
+    hasThreadToken o = assetClassValueOf (txOutValue o) (channelTokenAsset (channelToken oldDatum)) == 1
 
     keepsThreadTokenField :: Bool
     keepsThreadTokenField = channelToken outputDatum == channelToken oldDatum
@@ -576,8 +627,4 @@ checkThreadTokenInner :: CurrencySymbol -> ValidatorHash -> Value.Value -> Integ
 checkThreadTokenInner symbol (ValidatorHash vHash) vl i =
   Value.valueOf vl symbol (TokenName vHash) == i
 
-channelTokenValue :: CurrencySymbol -> TokenName -> Value.Value
-channelTokenValue symbol name = Value.singleton symbol name 1
 
-channelTokenValue' :: AssetClass -> Value.Value
-channelTokenValue' (AssetClass (s, t)) = channelTokenValue s t

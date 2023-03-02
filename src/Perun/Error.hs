@@ -48,6 +48,10 @@ data PerunError
   | -- | Thrown when force close on a channel is called, which was not
     -- already funded.
     ForceCloseOnNonFundedChannelError
+  | -- | Thrown when the channel id given to an endpoint does not align
+    -- with the channel id in a signed state or the computed channel id
+    -- from the channel parameters.
+    ChannelIdMismatchError
   | FindChannelError !FindChannelException
   | SubscriptionError !SubscriptionException
   | SomeContractError !ContractError
@@ -67,6 +71,12 @@ data FindChannelException
     -- TODO: This most likely has to be removed, since we cannot prevent
     -- anyone from just sending UTXOs to our channel.
     UnexpectedNumberOfUTXOsError
+  | -- | Thrown when no UTXO is found, which contains the ChannelToken
+    -- as value
+    NoThreadTokenError
+  | -- | Thrown when the channel datum attached to the channel UTXO does
+    -- not pass validation.
+    InvalidDatumError
   deriving (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
