@@ -30,6 +30,7 @@ import qualified PlutusTx
 import PlutusTx.Prelude
 import Text.Printf (printf)
 import qualified Prelude as P
+import Perun.Offchain (AllSignedStates (..), compressSignatures)
 
 type EvilContractState = Maybe (Semigroup.Last TxId)
 
@@ -65,7 +66,7 @@ data EvilDispute = EvilDispute
     edSigningPKs :: ![PaymentPubKey],
     edPaymentPKs :: ![PaymentPubKeyHash],
     edBalances :: ![Integer],
-    edSignedState :: !SignedState,
+    edSignedState :: !AllSignedStates,
     edCase :: !DisputeCase
   }
   deriving (Generic, ToJSON, FromJSON)
@@ -77,7 +78,7 @@ data CloseCase = CloseInvalidInputValue | CloseUnfunded
 
 data EvilClose = EvilClose
   { ecChannelId :: ChannelID,
-    ecSignedState :: !SignedState,
+    ecSignedState :: !AllSignedStates,
     ecSigningPKs :: ![PaymentPubKey],
     ecBalances :: [Integer],
     ecCase :: CloseCase
@@ -205,12 +206,12 @@ close (EvilClose cid ss _pks bals c) = case c of
   CloseInvalidInputValue -> closeInvalidInputValue cid ss
   CloseUnfunded -> closeUnfunded cid ss bals
 
-closeUnfunded :: ChannelID -> SignedState -> [Integer] -> Contract EvilContractState s PerunError ()
+closeUnfunded :: ChannelID -> AllSignedStates -> [Integer] -> Contract EvilContractState s PerunError ()
 closeUnfunded cid sst bals = do
   (oref, o, d@ChannelDatum {..}) <- findChannel cid
   logInfo @P.String $ printf "EVIL_CONTRACT: found channel utxo with datum %s" (P.show d)
   let newDatum = d
-      r = Scripts.Redeemer . PlutusTx.toBuiltinData . MkClose $ sst
+      r = Scripts.Redeemer . PlutusTx.toBuiltinData . MkClose $ compressSignatures sst
       v = Ada.toValue minAdaTxOut
       (lookup, tx) = uncheckedTx newDatum r cid v oref o
   ledgerTx <- submitTxConstraintsWith lookup (tx <> mconcat (zipWith Constraints.mustPayToPubKey (pPaymentPKs channelParameters) (map Ada.lovelaceValueOf bals)))
@@ -218,12 +219,12 @@ closeUnfunded cid sst bals = do
   tell . Just . Semigroup.Last . getCardanoTxId $ ledgerTx
   logInfo @P.String "EVIL_CONTRACT: executed malicious close"
 
-closeInvalidInputValue :: ChannelID -> SignedState -> Contract EvilContractState s PerunError ()
+closeInvalidInputValue :: ChannelID -> AllSignedStates -> Contract EvilContractState s PerunError ()
 closeInvalidInputValue cid sst = do
   (oref, o, d) <- findChannel cid
   logInfo @P.String $ printf "EVIL_CONTRACT: found channel utxo with datum %s" (P.show d)
   let newDatum = d
-      r = Scripts.Redeemer . PlutusTx.toBuiltinData . MkClose $ sst
+      r = Scripts.Redeemer . PlutusTx.toBuiltinData . MkClose $ compressSignatures sst
       v = Ada.toValue minAdaTxOut
   ledgerTx <- uncurry submitTxConstraintsWith $ uncheckedTx newDatum r cid v oref o
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
@@ -271,35 +272,35 @@ dispute EvilDispute {..} = case edCase of
   DisputeValidInput -> disputeValidInput edChannelId edSignedState edSigningPKs
   DisputeWrongState -> disputeWrongState edChannelId edSignedState
 
-disputeWrongState :: ChannelID -> SignedState -> Contract EvilContractState s PerunError ()
+disputeWrongState :: ChannelID -> AllSignedStates -> Contract EvilContractState s PerunError ()
 disputeWrongState cid sst = do
   (oref, o, d) <- findChannel cid
   disputeWithDatum oref o cid sst $ d {state = ChannelState (ChannelID "abc") [] 0 False}
 
-disputeValidInput :: ChannelID -> SignedState -> [PaymentPubKey] -> Contract EvilContractState s PerunError ()
+disputeValidInput :: ChannelID -> AllSignedStates -> [PaymentPubKey] -> Contract EvilContractState s PerunError ()
 disputeValidInput cid sst keys = do
-  let dState = extractVerifiedState sst keys
+  let dState = extractVerifiedState (compressSignatures sst) keys
   t <- currentTime
   (oref, o, d) <- findChannel cid
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   disputeWithDatum oref o cid sst d {state = dState, time = t, disputed = True}
 
-disputeWithDatum :: TxOutRef -> ChainIndexTxOut -> ChannelID -> SignedState -> ChannelDatum -> Contract EvilContractState s PerunError ()
+disputeWithDatum :: TxOutRef -> ChainIndexTxOut -> ChannelID -> AllSignedStates -> ChannelDatum -> Contract EvilContractState s PerunError ()
 disputeWithDatum oref o cid sst dat = do
   let newDatum = dat
-      r = Scripts.Redeemer . PlutusTx.toBuiltinData . MkDispute $ sst
+      r = Scripts.Redeemer . PlutusTx.toBuiltinData . MkDispute $ compressSignatures sst
       v = Ada.lovelaceValueOf . sum $ (balances . state $ dat)
   ledgerTx <- uncurry submitTxConstraintsWith $ uncheckedTx newDatum r cid v oref o
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
   tell . Just . Semigroup.Last . getCardanoTxId $ ledgerTx
   logInfo @P.String "EVIL_CONTRACT: executed malicious dispute"
 
-disputeInvalidInput :: ChannelID -> SignedState -> Contract EvilContractState s PerunError ()
+disputeInvalidInput :: ChannelID -> AllSignedStates -> Contract EvilContractState s PerunError ()
 disputeInvalidInput cid sst = do
   (oref, o, d) <- findChannel cid
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   let newDatum = d
-      r = Scripts.Redeemer . PlutusTx.toBuiltinData . MkDispute $ sst
+      r = Scripts.Redeemer . PlutusTx.toBuiltinData . MkDispute $ compressSignatures sst
       v = Ada.toValue minAdaTxOut
   ledgerTx <- uncurry submitTxConstraintsWith $ uncheckedTx newDatum r cid v oref o
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx

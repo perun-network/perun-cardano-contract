@@ -23,6 +23,7 @@ import Control.Lens hiding (both)
 import Control.Monad
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Data
+import Data.Monoid (Last (..))
 import qualified Data.Semigroup as Semigroup
 import Ledger hiding (version)
 import qualified Ledger.Ada as Ada
@@ -33,7 +34,7 @@ import PerunPlutus.Test.EvilContract
 import Plutus.Contract.Oracle
 import qualified Plutus.Contract.Request as Trace
 import Plutus.Contract.Test (Wallet, mockWalletPaymentPubKey, mockWalletPaymentPubKeyHash, w1, w2, w3, w4)
-import Plutus.Contract.Test.ContractModel
+import Plutus.Contract.Test.ContractModel as CM
 import qualified Plutus.Contract.Types as ET
 import qualified Plutus.Trace.Effects.Assert as TA (assert)
 import Plutus.Trace.Effects.RunContract (ContractConstraints)
@@ -43,6 +44,7 @@ import PlutusTx.Prelude hiding (mapM, unless)
 import Wallet.Emulator.MultiAgent as Emulator
 import qualified Wallet.Emulator.Wallet as Trace
 import qualified Prelude as P
+import Data.ByteString.Char8 (hPut)
 
 wallets :: [Wallet]
 wallets = [w1, w2, w3]
@@ -58,6 +60,7 @@ type PerunModel = Maybe PerunModelState
 -- | PerunModelState
 data PerunModelState = PerunModelState
   { _chanState :: !ChannelState,
+    _chanToken :: !SymToken,
     _chanTimeLock :: !Integer,
     _chanFunding :: ![Integer],
     _chanFunded :: !Bool,
@@ -79,23 +82,24 @@ instance ContractModel PerunModel where
    - Only supporting two party channels for now.
   --}
   data Action PerunModel
-    = -- Start the channel (with insufficient funding)
+    = 
+      -- Start the channel (with insufficient funding)
       -- Participants ChanelID Balances Timelock Nonce
       Start [Wallet] ChannelID [Integer] Integer Integer
     | -- Fund the channel
       -- Funder Index ChannelID
-      Fund Wallet Integer ChannelID
+      Fund Wallet Integer ChannelID SymToken
     | -- Abort the channel
       -- Issuer wallets ChannelID
-      Abort Wallet [Wallet] ChannelID
+      Abort Wallet [Wallet] ChannelID SymToken
     | -- Open Issuer Participants ChannelID Balances Timelock Nonce
       Open Wallet [Wallet] ChannelID [Integer] Integer Integer
     | -- Close Issuer Participants ChannelId.
-      Close Wallet [Wallet] ChannelID
+      Close Wallet [Wallet] ChannelID SymToken
     | -- ForceClose Issuer Participants ChannelID.
-      ForceClose Wallet [Wallet] ChannelID
+      ForceClose Wallet [Wallet] ChannelID SymToken
     | -- Dispute -> Issuer Participants ChannelId ProposedState
-      Dispute Wallet [Wallet] ChannelID ChannelState
+      Dispute Wallet [Wallet] ChannelID ChannelState SymToken
     | -- Update
       Update ChannelState
     | -- Finalize: sets the final bit in the state
@@ -115,7 +119,7 @@ instance ContractModel PerunModel where
     -- Only one type of contract under test, so we define the
     -- `ContractInstanceKey` with a single constructor distinguished by the
     -- wallet they are running in.
-    Participant :: Wallet -> ContractInstanceKey PerunModel () ChannelSchema PerunError ()
+    Participant :: Wallet -> ContractInstanceKey PerunModel TokenState ChannelSchema PerunError ()
     Adversary :: Wallet -> ContractInstanceKey PerunModel EvilContractState EvilSchema PerunError ()
 
   -- Start contract instances for the perun contract `Participant` and a
@@ -140,6 +144,7 @@ instance ContractModel PerunModel where
   -- Furthermore the `Contract` managing the funds has to know that it holds
   -- the balances for each wallet.
   nextState (Start parties cid startBalances timeLock _) = do
+    ct <- createToken "ChannelToken"
     modifyContractState $ \_ ->
       Just $
         PerunModelState
@@ -150,6 +155,7 @@ instance ContractModel PerunModel where
                   version = 0,
                   final = False
                 },
+            _chanToken = ct,
             _chanTimeLock = timeLock,
             _chanFunding = head startBalances : tail (map (const 0) startBalances),
             _chanFunded = False,
@@ -157,11 +163,13 @@ instance ContractModel PerunModel where
           }
     withdraw (head parties) . Ada.lovelaceValueOf $ head startBalances
     wait 1
-  nextState (Fund funder idx _) = do
+    CM.mint $ symAssetClassValue ct 1
+
+  nextState (Fund funder idx _ _) = do
     modifyContractState
       ( \case
           Nothing -> P.error "Funding only works on existing channels"
-          Just pms@(PerunModelState chst _tl oldFunding isFunded isDisputed)
+          Just pms@(PerunModelState chst _  _tl oldFunding isFunded isDisputed)
             | isFunded || isDisputed -> P.error "Funding only works on unfunded & undisputed channels"
             | otherwise ->
               let newFunding = addFunding (balances chst !! idx) idx oldFunding
@@ -171,21 +179,22 @@ instance ContractModel PerunModel where
                         _chanFunded = newFunding == balances chst
                       }
       )
+    wait 3
     s <-
       getContractState >>= \case
         Nothing -> P.error "unable to read contract state"
         Just ps -> return $ ps ^. chanState
     withdraw funder $ Ada.lovelaceValueOf (balances s !! idx)
-    wait 1
-  nextState (Abort _ parties _) = do
-    curFunding <-
+  nextState (Abort _ parties _ _) = do
+    (curFunding, token) <-
       getContractState >>= \case
         Nothing -> P.error "Abort only works on existing channels"
-        Just ps -> return $ ps ^. chanFunding
-
+        Just ps -> return (ps ^. chanFunding, ps ^. chanToken)
+    burn $ symAssetClassValue token 1
     zipWithM_ deposit parties (map Ada.lovelaceValueOf curFunding)
     wait 1
   nextState (Open funder _ cid openBalances timeLock _) = do
+    ct <- createToken "ChannelToken"
     modifyContractState $ \_ ->
       Just $
         PerunModelState
@@ -196,6 +205,7 @@ instance ContractModel PerunModel where
                   version = 0,
                   final = False
                 },
+            _chanToken = ct,
             _chanTimeLock = timeLock,
             _chanFunding = [],
             _chanFunded = True,
@@ -204,6 +214,7 @@ instance ContractModel PerunModel where
     -- Move funds from chan -> Contract instance.
     withdraw funder $ Ada.lovelaceValueOf $ sum openBalances
     wait 1
+    CM.mint $ symAssetClassValue ct 1
   nextState (Update cs) = do
     modifyContractState
       ( \case
@@ -218,24 +229,26 @@ instance ContractModel PerunModel where
             | not (pms ^. chanFunded) -> P.error "Dispute only works on funded channels"
             | otherwise -> Just $ pms & chanDisputed .~ True
       )
-    wait 1
-  nextState (Close _ parties _) = do
-    s <-
+    wait 3
+  nextState (Close _ parties _ _) = do
+    (s, t) <-
       getContractState >>= \case
         Nothing -> P.error "close only works on existing channels"
         Just pms
           | not (pms ^. chanFunded) -> P.error "Close only works on funded channels"
-          | otherwise -> return $ pms ^. chanState
-    zipWithM_ deposit parties (map Ada.lovelaceValueOf (balances s))
+          | otherwise -> return (pms ^. chanState, pms ^. chanToken)
     wait 1
+    burn $ symAssetClassValue t 1
+    zipWithM_ deposit parties (map Ada.lovelaceValueOf (balances s))
   -- ForceClosing does nothing to the contract state, yet.
-  nextState (ForceClose _ parties _) = do
-    s <-
+  nextState (ForceClose _ parties _ _) = do
+    (s, t) <-
       getContractState >>= \case
         Nothing -> P.error "ForceClose only works on existing channels"
         Just pms
           | not (pms ^. chanFunded) -> P.error "Close only works on funded channels"
-          | otherwise -> return $ pms ^. chanState
+          | otherwise -> return (pms ^. chanState, pms ^. chanToken)
+    burn $ symAssetClassValue t 1
     zipWithM_ deposit parties (map Ada.lovelaceValueOf (balances s))
     wait 1
   nextState Finalize =
@@ -251,10 +264,11 @@ instance ContractModel PerunModel where
   nextState (MaliciousForceClose n _ _ _) = invariant >> wait n
   nextState (MaliciousDispute n _ _ _ _ _) = invariant >> wait n
 
-  perform handle _ s cmd = case cmd of
+  perform handle tokenMap s cmd = case cmd of
     Start parties cid startBalances timeLock nonce -> do
+      let h = handle $ Participant (head parties)
       Trace.callEndpoint @"start"
-        (handle $ Participant (head parties))
+        h
         ( OpenParams
             cid
             (map mockWalletPaymentPubKey parties)
@@ -264,19 +278,23 @@ instance ContractModel PerunModel where
             nonce
         )
       delay 1
-    Fund funder idx cid -> do
+      Trace.observableState h >>= \case
+        Last (Just ct) -> registerToken "ChannelToken" (channelTokenAsset ct)
+        _ -> P.error "Could not find channel token"
+    Fund funder idx cid channelSymToken -> do
       Trace.callEndpoint @"fund"
         (handle $ Participant funder)
-        (FundParams cid idx)
-      delay 1
-    Abort issuer _ cid -> do
+        (FundParams cid (tokenMap channelSymToken) idx)
+      delay 3
+    Abort issuer _ cid channelSymToken -> do
       Trace.callEndpoint @"abort"
         (handle $ Participant issuer)
-        (AbortParams cid)
+        (AbortParams cid (tokenMap channelSymToken))
       delay 1
     Open wf parties cid bals timelock nonce -> do
+      let h = handle $ Participant wf
       Trace.callEndpoint @"open"
-        (handle $ Participant wf)
+        h
         ( OpenParams
             cid
             (map mockWalletPaymentPubKey parties)
@@ -286,33 +304,40 @@ instance ContractModel PerunModel where
             nonce
         )
       delay 1
+      os <- Trace.observableState h
+      case getLast os of
+        Just ct -> registerToken "ChannelToken" (channelTokenAsset ct)
+        Nothing -> P.error "Could not find channel token"
+
     Update {} -> do
       -- Update is an offchain action, so we do not perform any computation
       -- onchain wise.
       return ()
-    Dispute issuer parties _ chState -> do
+    Dispute issuer parties cid chState channelSymToken -> do
       wss <- mapM Trace.agentState parties
       let sks = map (unPaymentPrivateKey . Trace.ownPaymentPrivateKey) wss
       let pks = map Trace.ownPaymentPublicKey wss
       Trace.callEndpoint @"dispute"
         (handle $ Participant issuer)
         ( DisputeParams
+            cid
+            (tokenMap channelSymToken)
             pks
-            (SignedState (map (signMessage' chState) sks))
+            (AllSignedStates (map (signMessage' chState) sks))
         )
-      delay 1
-    Close issuer parties _ -> do
+      delay 3
+    Close issuer parties cid channelSymToken -> do
       let cs = s ^. contractState
       chan <- case cs of
         Nothing -> Trace.throwError . Trace.GenericError $ "no channel to close"
         Just pms -> return $ pms ^. chanState
       (ss, pks, _) <- verifiedSignedStateAndKeys parties chan
-      Trace.callEndpoint @"close" (handle $ Participant issuer) (CloseParams pks ss)
+      Trace.callEndpoint @"close" (handle $ Participant issuer) (CloseParams cid (tokenMap channelSymToken) pks ss)
       delay 1
-    ForceClose issuer _ cID -> do
+    ForceClose issuer _ cID channelSymToken -> do
       Trace.callEndpoint @"forceClose"
         (handle $ Participant issuer)
-        (ForceCloseParams cID)
+        (ForceCloseParams cID (tokenMap channelSymToken))
       delay 1
     Finalize -> return ()
     Wait duration -> delay duration
@@ -328,7 +353,7 @@ instance ContractModel PerunModel where
         Nothing -> Trace.throwError . Trace.GenericError $ "no channel to close"
         Just pms -> return $ pms ^. chanState
       (_, pks, _) <- verifiedSignedStateAndKeys parties chan
-      requireInvalidTxEndpoint @"close" (handle $ Adversary w) (EvilClose cID (SignedState [signMessage' (ChannelState (ChannelID "abc") [0] 0 False) sk]) pks bals c) "malicious closing should not work"
+      requireInvalidTxEndpoint @"close" (handle $ Adversary w) (EvilClose cID (AllSignedStates [signMessage' (ChannelState (ChannelID "abc") [0] 0 False) sk]) pks bals c) "malicious closing should not work"
     MaliciousForceClose _ w cid c -> do
       requireInvalidTxEndpoint @"forceClose" (handle $ Adversary w) (EvilForceClose cid c) "malicious forceClose should not work"
     MaliciousDispute _ w cid parties bals c -> do
@@ -339,12 +364,12 @@ instance ContractModel PerunModel where
       (ss, pks, _) <- verifiedSignedStateAndKeys parties chan
       requireInvalidTxEndpoint @"dispute" (handle $ Adversary w) (EvilDispute cid pks (map paymentPubKeyHash pks) bals ss c) "malicious dispute should not work"
 
-verifiedSignedStateAndKeys :: [Wallet] -> ChannelState -> SpecificationEmulatorTrace (SignedState, [PaymentPubKey], [Crypto.XPrv])
+verifiedSignedStateAndKeys :: [Wallet] -> ChannelState -> SpecificationEmulatorTrace (AllSignedStates, [PaymentPubKey], [Crypto.XPrv])
 verifiedSignedStateAndKeys parties chan = do
   wss <- mapM Trace.agentState parties
   let sks = map (unPaymentPrivateKey . Trace.ownPaymentPrivateKey) wss
   let pks = map Trace.ownPaymentPublicKey wss
-  return (SignedState (map (signMessage' chan) sks), pks, sks)
+  return (AllSignedStates (map (signMessage' chan) sks), pks, sks)
 
 -- | Model does not change!
 invariant :: Spec s ()
