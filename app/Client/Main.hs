@@ -136,10 +136,10 @@ main' (CLA aliceWallet bobWallet network) = do
     -- Endpoint Parameters
     let payPubKeyHashes = [alicePKH, bobPKH]
         signingPKs = [aliceSPK, bobSPK]
-        channelId = getChannelId (Channel defaultTimeLock signingPKs payPubKeyHashes nonce)
+        chanId = getChannelId (Channel defaultTimeLock signingPKs payPubKeyHashes nonce)
         startParams =
           OpenParams
-            { spChannelId = channelId,
+            { spChannelId = chanId,
               spSigningPKs = signingPKs,
               spPaymentPKs = payPubKeyHashes,
               spBalances = [defaultBalance, defaultBalance],
@@ -150,15 +150,15 @@ main' (CLA aliceWallet bobWallet network) = do
     -- Trace definition.
     withChannelToken @"alice" startParams $ \ct -> do
       let ctAsset = channelTokenAsset ct
-          fundParams = FundParams channelId ctAsset 1
-          stateV1 = ChannelState channelId [defaultBalance `div` 2, (defaultBalance `div` 2) * 3] 1 False
+          fundParams = FundParams chanId ctAsset 1
+          stateV1 = ChannelState chanId [defaultBalance `div` 2, (defaultBalance `div` 2) * 3] 1 False
           change = defaultBalance `div` 4
-          stateV2 = ChannelState channelId [defaultBalance + change, defaultBalance - change] 2 False
-          forceCloseParams = ForceCloseParams channelId ctAsset
+          stateV2 = ChannelState chanId [defaultBalance + change, defaultBalance - change] 2 False
+          forceCloseParams = ForceCloseParams chanId ctAsset
       signedStateV1 <- update stateV1
       signedStateV2 <- update stateV2
-      let disputeBobParams = DisputeParams channelId ctAsset signingPKs signedStateV1
-          disputeAliceParams = DisputeParams channelId ctAsset signingPKs signedStateV2
+      let disputeBobParams = DisputeParams chanId ctAsset signingPKs signedStateV1
+          disputeAliceParams = DisputeParams chanId ctAsset signingPKs signedStateV2
       delayAll 15_000_000
       callEndpointFor @"bob" "fund" fundParams
       delayAll 30_000_000
