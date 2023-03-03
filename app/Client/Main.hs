@@ -147,11 +147,8 @@ main' (CLA aliceWallet bobWallet network) = do
               spNonce = nonce
             }
 
-    subscribeAdjudicator @"alice" channelId
-
-
     -- Trace definition.
-    withChannel @"alice" startParams $ \ct -> do
+    withChannelToken @"alice" startParams $ \ct -> do
       let ctAsset = channelTokenAsset ct
           fundParams = FundParams channelId ctAsset 1
           stateV1 = ChannelState channelId [defaultBalance `div` 2, (defaultBalance `div` 2) * 3] 1 False

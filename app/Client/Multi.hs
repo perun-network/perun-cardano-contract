@@ -25,7 +25,7 @@ module Multi
     MultiClientError (..),
     runMultiClientWith,
     delayAll,
-    withChannel,
+    withChannelToken,
     callEndpointFor,
     actionBy,
     subscribeToContractEvents,
@@ -44,17 +44,17 @@ import Control.Lens
 import Control.Logger.Simple
 import Control.Monad.Except
 import Control.Monad.State
-import Data.Aeson (ToJSON)
+import Data.Aeson (ToJSON, Value (Null))
 import qualified Data.Map.Strict as Map
 import Data.Proxy
 import Data.Text (pack)
 import GHC.TypeLits
-import Perun.Onchain
+import Perun (OpenParams)
 import Perun.Offchain (AllSignedStates (..))
+import Perun.Onchain
+import Plutus.PAB.Webserver.Types
 import Servant.Client
 import Websocket
-import Perun (OpenParams)
-import Plutus.PAB.Core.ContractInstance.STM (observableContractState)
 
 newtype MultiClientState = MultiClientState
   { _multiClientStateActors :: Map.Map String PerunClientState
@@ -63,7 +63,7 @@ newtype MultiClientState = MultiClientState
 makeFields ''MultiClientState
 
 data MultiClientError
-  = MultiClientNoObservableStateError 
+  = MultiClientNoObservableStateError
   | MultiClientImpossibleLookupErr
   | MultiClientEndpointErr !ClientError
   deriving (Show)
@@ -89,15 +89,27 @@ runMultiClientWith creds action = do
     logInfo "MultiClient trace done."
     return res
 
-withChannel :: forall actor actors a. (HasActor actor actors) => OpenParams -> (ChannelToken -> MultiClient actors a) -> MultiClient actors a
-withChannel openParams action = do
-  callEndpointFor @actor "start" openParams
-  ct <- actionBy @actor getObservableState >>= \case
-    Nothing -> throwError MultiClientNoObservableStateError
-    Just ct -> return ct
+withChannelToken :: forall actor actors a. (HasActor actor actors) => OpenParams -> (ChannelToken -> MultiClient actors a) -> MultiClient actors a
+withChannelToken openParams action = do
+  actorStates <- gets _multiClientStateActors
+  let call = callEndpointFor @actor @actors "start" openParams
+  (cid, baseUrl) <- actionBy @actor $ do
+    cid <- gets (^. instClientId)
+    ClientEnv {baseUrl} <- gets (^. pabClientEnv)
+    return (cid, baseUrl)
+  let predf (Just (NewObservableState Null)) = False
+      predf (Just (NewObservableState _s)) = True
+      predf _ = False
+  void . liftIO . withContractSubscription baseUrl cid predf $ do
+    res <- flip evalStateT (MultiClientState actorStates) . runExceptT . unMultiClient $ call
+    case res of
+      Left err -> print err
+      Right _ -> return ()
+  ct <-
+    actionBy @actor getObservableState >>= \case
+      Nothing -> throwError MultiClientNoObservableStateError
+      Just ct -> return ct
   action ct
-
-    
 
 delayAll :: Int -> MultiClient actors ()
 delayAll ms = do

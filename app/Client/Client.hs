@@ -25,7 +25,7 @@ import Control.Exception
 import Control.Lens
 import Control.Monad.Except
 import Control.Monad.State
-import Data.Aeson (Result (..), fromJSON, toJSON)
+import Data.Aeson (Result (..), encode, fromJSON, toJSON)
 import qualified Data.ByteString as BS
 import Data.Monoid (Last (..))
 import Data.Proxy
@@ -37,15 +37,15 @@ import Network.HTTP.Client hiding (Proxy)
 import PAB
 import Perun.Onchain
 import Plutus.Contract.Oracle
-import Plutus.PAB.Webserver.Client
-import Plutus.PAB.Webserver.Types
 import Plutus.PAB.Events.ContractInstanceState (PartiallyDecodedResponse (..))
+import Plutus.PAB.Webserver.Client
+import Plutus.PAB.Webserver.Client (InstanceClient (getInstanceStatus))
+import Plutus.PAB.Webserver.Types
+import Plutus.PAB.Webserver.Types (ContractInstanceClientState (cicCurrentState))
 import Servant.Client
 import Wallet.Emulator.Wallet
 import Wallet.Types (ContractInstanceId)
 import Prelude hiding (id)
-import Plutus.PAB.Webserver.Client (InstanceClient(getInstanceStatus))
-import Plutus.PAB.Webserver.Types (ContractInstanceClientState(cicCurrentState))
 
 data PerunClientState = PerunClientState
   { _perunClientStateAddress :: !(Address ShelleyAddr),
@@ -208,5 +208,10 @@ getObservableState = do
       Left err -> error $ show err -- FIXME: Add PeruncClientError
       Right r -> return r
   let currentState = cicCurrentState contractState
-      (Success lst) = fromJSON @(Last ChannelToken) $ observableState currentState 
+  lst <- case fromJSON @(Last ChannelToken) $ observableState currentState of
+    Error err -> do
+      liftIO . print . encode . observableState $ currentState
+      error . unwords $ ["could not decode channeltoken", err]
+    Success lst -> do
+      return lst
   return $ getLast lst
