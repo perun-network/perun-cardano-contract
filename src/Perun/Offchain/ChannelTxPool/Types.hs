@@ -11,7 +11,7 @@ import Plutus.ChainIndex.Api
 -- | ChannelTxPool is a pool of ChannelTxs for a specific channel id.
 -- Following invariants hold:
 --  1. All TXs contained are ONLY relevant for a single channel id.
-newtype ChannelTxPool = ChannelTxPool_ [ChannelTx]
+data ChannelTxPool = ChannelTxPool_ ChannelToken [ChannelTx]
 
 -- | ChannelTx is a ChannelTx without any constraints on the input and output.
 type ChannelTx =
@@ -64,8 +64,8 @@ data ChannelTxDynamic i o = ChannelTx_
 -- respectively. They instead have to use our exposed smart constructors
 -- defined in `Perun.Offchain.ChannelTxPool.ChannelTxPool`.
 
-pattern ChannelTxPool :: [ChannelTx] -> ChannelTxPool
-pattern ChannelTxPool txs = ChannelTxPool_ txs
+pattern ChannelTxPool :: ChannelToken -> [ChannelTx] -> ChannelTxPool
+pattern ChannelTxPool ct txs = ChannelTxPool_ ct txs
 
 {-# COMPLETE ChannelTxPool #-}
 

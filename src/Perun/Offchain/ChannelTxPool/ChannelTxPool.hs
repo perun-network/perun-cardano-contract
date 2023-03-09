@@ -1,9 +1,14 @@
 module Perun.Offchain.ChannelTxPool.ChannelTxPool
-  ( txpoolForChannel,
-    mkTxPool,
+  ( txpoolsForChannel,
+    mkTxPools,
     mkChannelGenesis,
     mkChannelStep,
     mkChannelLast,
+    hasValidThreadToken,
+    isValidDatum,
+    parseDatumFromOutputDatum,
+    channelDatumFromDatum,
+    ChannelTxErr (..),
   )
 where
 
@@ -12,10 +17,13 @@ import Control.Monad (unless)
 import Control.Monad.Error.Lens (throwing)
 import Data.Default
 import Data.Either (rights)
+import Data.List (find, foldl')
 import qualified Data.Map.Strict as Map
 import Data.Maybe
 import Ledger hiding (ChainIndexTxOut)
+import Ledger.Value (assetClassValueOf)
 import Perun.Error
+import Perun.Offchain (getChannelId)
 import Perun.Offchain.ChannelTxPool.Types
 import Perun.Onchain
 import Plutus.ChainIndex hiding (txFromTxId)
@@ -24,11 +32,11 @@ import Plutus.Contract
 import Plutus.Contract.Request
 import PlutusTx
 
-txpoolForChannel ::
+txpoolsForChannel ::
   (AsPerunError e, AsContractError e) =>
   ChannelID ->
-  Contract w s e ChannelTxPool
-txpoolForChannel cid = allTxosAt (channelAddress cid) >>= mkTxPool cid
+  Contract w s e [ChannelTxPool]
+txpoolsForChannel cid = allTxosAt (channelAddress cid) >>= mkTxPools cid
 
 allTxosAt ::
   (AsPerunError e, AsContractError e) =>
@@ -48,15 +56,16 @@ allTxosAt addr = go def
         TxosResponse (Page _ np txoRefs) -> do
           (txoRefs ++) <$> go np
 
--- | mkTxPool creates a transaction pool for the given channel id using a list
--- of TxOutRefs. This version works in the Contract monad since it is required
--- to interface with the ChainIndex to obtain metadata.
-mkTxPool ::
+-- | mkTxPools creates possibly multiple transaction pools distinguish by a
+-- ChannelToken for the given channel id using a list of TxOutRefs. This
+-- version works in the Contract monad since it is required to interface with
+-- the ChainIndex to obtain metadata.
+mkTxPools ::
   (AsPerunError e, AsContractError e) =>
   ChannelID ->
   [TxOutRef] ->
-  Contract w s e ChannelTxPool
-mkTxPool cid txoRefs = do
+  Contract w s e [ChannelTxPool]
+mkTxPools cid txoRefs = do
   let resolveTx ref =
         (txFromTxId . txOutRefId $ ref) >>= \case
           Nothing -> do
@@ -66,15 +75,35 @@ mkTxPool cid txoRefs = do
           Just r -> return r
   uniqueCitxs <- dedup <$> mapM resolveTx txoRefs
   channelTxs <- rights <$> mapM (mkChannelTx cid) uniqueCitxs
-  return $ ChannelTxPool channelTxs
+  return . filterValidStart . partitionByChannelToken $ channelTxs
+  where
+    filterValidStart = filter (\(ChannelTxPool ct ctxs) -> any isValidStart ctxs)
+    isValidStart (ChannelTx _ Nothing (Just _)) = True
+    isValidStart _ = False
+
+partitionByChannelToken ::
+  [(ChannelToken, ChannelTx)] ->
+  [ChannelTxPool]
+partitionByChannelToken chanTxsWithToken = map (uncurry ChannelTxPool_) $ Map.toList poolMap
+  where
+    poolMap = foldl' f Map.empty chanTxsWithToken
+    f acc (token, chanTx) = Map.insertWith (++) token [chanTx] acc
 
 mkChannelTx ::
   (AsPerunError e, AsContractError e) =>
   ChannelID ->
   ChainIndexTx ->
-  Contract w s e (Either ChannelTxErr ChannelTx)
+  Contract w s e (Either ChannelTxErr (ChannelToken, ChannelTx))
 mkChannelTx cid citx = do
-  i <- case resolveInput cid citx of
+  let resolveTx ref =
+        txFromTxId ref >>= \case
+          Nothing -> do
+            -- Abort if the chainindex is corrupted and could not retrieve
+            -- the necessary transactions.
+            throwing _SubscriptionError CorruptedChainIndexErr
+          Just r -> return r
+  allInputTxs <- mapM (resolveTx . txOutRefId . txInRef) (citx ^. citxInputs)
+  i <- case resolveInput cid citx allInputTxs of
     Right i -> return $ Just i
     Left NoChannelInputErr -> return Nothing
     _else -> throwing _SubscriptionError CorruptedChainIndexErr
@@ -82,8 +111,23 @@ mkChannelTx cid citx = do
     Right o -> return $ Just o
     Left NoChannelOutputErr -> return Nothing
     _else -> throwing _SubscriptionError CorruptedChainIndexErr
-  mkChannelTx' i o
+  ct <- retrieveChannelToken i o
+  (fmap (ct,)) <$> mkChannelTx' i o
   where
+    retrieveChannelToken ::
+      (AsPerunError e, AsContractError e) =>
+      Maybe (TxOutRef, ChannelAction, ChannelDatum) ->
+      Maybe (TxOutRef, ChannelDatum) ->
+      Contract w s e ChannelToken
+    retrieveChannelToken Nothing Nothing = throwing _SubscriptionError CorruptedChainIndexErr
+    retrieveChannelToken (Just (_, _, d)) Nothing = return $ channelToken d
+    retrieveChannelToken Nothing (Just (_, d)) = return $ channelToken d
+    retrieveChannelToken (Just (_, _, d)) (Just (_, d')) = do
+      let iToken = channelToken d
+          oToken = channelToken d'
+      unless (iToken == oToken) $
+        throwing _SubscriptionError CorruptedChainIndexErr
+      return iToken
     -- mkChannelTx' returns ChannelTxErr if neither an input, nor an output for
     -- a channel was found. This happens if the tx in question was randomly
     -- sent to the channel address.
@@ -100,19 +144,33 @@ data ChannelTxErr
   | NoChannelOutputDatumErr
   | NoChannelInputRedeemerErr
   | NoChannelInputErr
+  | NoStartStateFoundErr
+  | InvalidTxErr
   | NoChannelOutputErr
   | UnexpectedInvalidTxErr
   | ChannelCorruptedChainIndexErr
   | WrongThreadTokenErr
+  | InvalidChannelDatumErr
+  | InvalidTxOutRefErr
+  | InvalidThreadTokenErr
   deriving (Show)
 
 resolveInput ::
   ChannelID ->
   ChainIndexTx ->
+  [ChainIndexTx] ->
   Either ChannelTxErr (TxOutRef, ChannelAction, ChannelDatum)
-resolveInput cid citx = do
+resolveInput cid citx inputCitxs = do
   let inputs = citx ^. citxInputs
       ourValidator = channelValidator cid
+  let inputValue (TxOutRef id idx) = do
+        let citxOfInterest = find (\citx -> citx ^. citxTxId == id) inputCitxs
+        output <- case citxOfInterest of
+          Nothing -> throwError NoChannelInputErr
+          Just citx -> case citx ^. citxOutputs of
+            InvalidTx -> throwError InvalidTxErr
+            ValidTx outs -> return $ outs !! fromIntegral idx
+        return $ citoValue output
   channelInputs <-
     rights
       <$> mapM
@@ -125,6 +183,8 @@ resolveInput cid citx = do
                 tr <- case fromBuiltinData . getRedeemer $ r of
                   Just tr -> return tr
                   Nothing -> throwError NoChannelInputRedeemerErr
+                val <- inputValue ref
+                unless (hasValidThreadToken cid (channelToken d) val) $ throwError WrongThreadTokenErr
                 return $ Right (ref, tr, d)
             _else -> return $ Left ChannelTxErr
         )
@@ -148,7 +208,6 @@ resolveOutput ::
   Either ChannelTxErr (TxOutRef, ChannelDatum)
 resolveOutput cid citx = do
   let outputs = citx ^. citxOutputs
-      ourValidator = channelValidator cid
   os <- case outputs of
     InvalidTx -> throwError UnexpectedInvalidTxErr
     ValidTx os -> return os
@@ -181,11 +240,39 @@ resolveOutput cid citx = do
             throwError ChannelCorruptedChainIndexErr
           Just d -> return d
         OutputDatum d -> return d
-      --unless (hasThreadToken $ citoValue citxOut) $ throwError WrongThreadTokenErr
+      cDatum <- case PlutusTx.fromBuiltinData . getDatum $ d of
+        Nothing -> throwError InvalidChannelDatumErr
+        Just d -> return d
+      unless (isValidDatum cid cDatum) $ throwError InvalidChannelDatumErr
+      unless (hasValidThreadToken cid (channelToken cDatum) (citoValue citxOut)) $ throwError WrongThreadTokenErr
       (txOutRef,) <$> channelDatumFromDatum d
-    -- TODO: Finish. This is a placeholder for the thread token check.
-    hasThreadToken :: Value -> Bool
-    hasThreadToken v = True
+
+parseDatumFromOutputDatum :: ChainIndexTx -> OutputDatum -> Either ChannelTxErr Datum
+parseDatumFromOutputDatum _ NoOutputDatum = throwError NoChannelOutputDatumErr
+parseDatumFromOutputDatum citx (OutputDatumHash h) = case Map.lookup h $ citx ^. citxData of
+  Nothing -> throwError ChannelCorruptedChainIndexErr
+  Just d -> return d
+parseDatumFromOutputDatum _ (OutputDatum d) = return d
+
+parseChannelDatumFromOutputDatum :: ChainIndexTx -> OutputDatum -> Either ChannelTxErr ChannelDatum
+parseChannelDatumFromOutputDatum citx o =
+  parseDatumFromOutputDatum citx o >>= channelDatumFromDatum
+
+-- TODO: Add more sanity checks for ChannelDatum.
+-- TODO: Channel might be closed, fix it plz.
+isValidDatum :: ChannelID -> ChannelDatum -> Bool
+isValidDatum cid d =
+  let ch = channelParameters d
+   in getChannelId ch == cid
+
+-- | hasValidThreadToken checks whether the given Value contains a valid
+-- threadtoken for the given ChannelID.
+hasValidThreadToken :: ChannelID -> ChannelToken -> Value -> Bool
+hasValidThreadToken cid ct v =
+  let ourValidatorHash = channelHash cid
+   in assetClassValueOf v (channelTokenAsset ct) == 1
+        && channelTokenSymbol (ctTxOutRef ct) == ctSymbol ct
+        && channelTokenName ourValidatorHash == ctName ct
 
 channelDatumFromDatum :: Datum -> Either ChannelTxErr ChannelDatum
 channelDatumFromDatum (Datum b) = case fromBuiltinData b of

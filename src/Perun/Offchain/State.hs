@@ -15,6 +15,9 @@ type PerunEvent = [ChannelEvent]
 perunState :: OnChainState -> ChannelDatum
 perunState (OnChainState ref) = Typed.tyTxOutData . Typed.tyTxOutRefOut $ ref
 
+channelTokenFromOnChainState :: OnChainState -> ChannelToken
+channelTokenFromOnChainState = channelToken . perunState
+
 newtype OnChainState = OnChainState
   { ocsTxOutRef :: Typed.TypedScriptTxOutRef ChannelTypes
   }
