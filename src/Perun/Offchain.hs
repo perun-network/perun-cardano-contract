@@ -97,7 +97,7 @@ data CloseParams = CloseParams
 
 data ForceCloseParams = ForceCloseParams
   { fcpChannelId :: !ChannelID,
-    fcpChanelToken :: !AssetClass
+    fcpChannelToken :: !AssetClass
   }
   deriving (Generic, ToJSON, FromJSON, ToSchema)
   deriving stock (P.Eq, P.Show)
