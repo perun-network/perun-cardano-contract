@@ -8,11 +8,10 @@ where
 import Control.Lens hiding (index, para)
 import Control.Monad (unless)
 import Control.Monad.Error.Lens
-import Data.Either (rights)
 import Data.List (find)
 import qualified Data.Map.Strict as Map
 import Data.Maybe
-import Data.Text (Text, pack)
+import Data.Text (pack)
 import Ledger hiding (ChainIndexTxOut)
 import qualified Ledger.Tx as L
 import Perun.Adjudicator.History
@@ -55,9 +54,11 @@ adjudicatorSubscription cID = do
       loop = loopM onEvents
   initial <- getOnChainState cID
   case initial of
-    Right cs -> do
+    Right _cs -> do
       -- We found an initial channel state, so we fetch all past events before
       -- continuing listening for new state changes.
+      -- We will fetch all updates to the channel, so we can ignore the
+      -- current onchain state.
       logInfo @String $ unwords ["found initial state for channel:", show cID]
       -- TODO: We do not want to `head` here but instead we should handle
       -- all possible chain event lists.
@@ -77,18 +78,18 @@ tellAndLog ::
   [ChannelEvent] ->
   Contract PerunEvent AdjudicatorSchema e ()
 tellAndLog cid events = do
-  mapM_ log events
+  mapM_ log' events
   tell events
   where
-    log Created {} = logInfo @String $ unwords ["Created channel", show cid]
-    log Deposited {} = logInfo @String $ unwords ["Deposited into channel", show cid]
-    log Disputed {} = logInfo @String $ unwords ["Disputed channel", show cid]
-    log Progressed {} = logInfo @String $ unwords ["Progressed channel", show cid]
-    log Concluded {} = logInfo @String $ unwords ["Concluded channel", show cid]
-    log Withdrawn = logInfo @String $ unwords ["Withdrawn from channel", show cid]
+    log' Created {} = logInfo @String $ unwords ["Created channel", show cid]
+    log' Deposited {} = logInfo @String $ unwords ["Deposited into channel", show cid]
+    log' Disputed {} = logInfo @String $ unwords ["Disputed channel", show cid]
+    log' Progressed {} = logInfo @String $ unwords ["Progressed channel", show cid]
+    log' Concluded {} = logInfo @String $ unwords ["Concluded channel", show cid]
+    log' Withdrawn = logInfo @String $ unwords ["Withdrawn from channel", show cid]
 
 eventsFromChannelWaitingResult :: ChannelWaitingResult -> Either SubscriptionException [ChannelEvent]
-eventsFromChannelWaitingResult (ChannelTransition action oldState newState) =
+eventsFromChannelWaitingResult (ChannelTransition action _oldState newState) =
   deduceEvents $ ChannelStep action (perunState newState) ChannelNil
 eventsFromChannelWaitingResult (ChannelCreated newState) = Right [Created . perunState $ newState]
 eventsFromChannelWaitingResult (ChannelEnded finalState) = Right [Concluded . perunState $ finalState]
@@ -168,10 +169,10 @@ parseChannelAction ::
   OnChainState ->
   ChainIndexTx ->
   Contract PerunEvent s e ChannelAction
-parseChannelAction (OnChainState inputRef) citx = do
-  let inputs = citx ^. citxInputs
-      ir = Typed.tyTxOutRefRef inputRef
-  txIn <- case find ((== ir) . txInRef) inputs of
+parseChannelAction (OnChainState iref) citx = do
+  let cInputs = citx ^. citxInputs
+      ir = Typed.tyTxOutRefRef iref
+  txIn <- case find ((== ir) . txInRef) cInputs of
     Just txIn -> return txIn
     _else -> throwing _SubscriptionError CorruptedChainIndexErr
   rawAction <- case txInType txIn of
@@ -351,14 +352,13 @@ getStart cid refMap = do
         Nothing -> throwError InvalidTxOutRefErr
         Just ciTxOut -> return ciTxOut
       let rawDatum = citoDatum ciTxOut
-          val = citoValue ciTxOut
       d <- parseDatumFromOutputDatum citx rawDatum
       cd <- channelDatumFromDatum d
       tyTxOutRef <- case Typed.typeScriptTxOutRef tcv txOutRef (toTxOut lCiTxOut) d of
         Left _ -> throwError InvalidTxOutRefErr
         Right tyTxOutRef -> return tyTxOutRef
       return (ciTxOut, citx, d, cd, tyTxOutRef)
-    isStartState (ciTxOut, _, d, cd, _) =
+    isStartState (ciTxOut, _, _, cd, _) =
       let val = citoValue ciTxOut
        in hasValidThreadToken cid (channelToken cd) val && isValidDatum cid cd
 

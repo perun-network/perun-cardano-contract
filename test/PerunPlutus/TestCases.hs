@@ -6,7 +6,6 @@ module PerunPlutus.TestCases (perunTests) where
 
 import Control.Lens hiding (both)
 import Data.Tuple.Extra
-import Perun (Channel)
 import Perun hiding (ChannelAction (..))
 import PerunPlutus.PerunSpec
 import PerunPlutus.Test.EvilContract
@@ -37,23 +36,23 @@ defaultTimeLock = defaultTimeLockSlots * 1000
 samePartySameValuePayoutTest :: (Wallet, Wallet) -> DL PerunModel ()
 samePartySameValuePayoutTest (wa, wf) = do
   nonce <- forAllQ arbitraryQ
-  let channelId = getChannelId $ getChannel [wa, wa] nonce
-  action $ Open wf [wa, wa] channelId [minAda, minAda] defaultTimeLock nonce
+  let cid = getChannelId $ getChannel [wa, wa] nonce
+  action $ Open wf [wa, wa] cid [minAda, minAda] defaultTimeLock nonce
   action Finalize
   chSt <- requireGetChannel "channel must be available after finalization"
 
-  action $ Close wa [wa, wa] channelId (chSt ^. chanToken)
+  action $ Close wa [wa, wa] cid (chSt ^. chanToken)
 
 -- | sameValuePayoutTest checks that the payout validation works if there are
 -- | multiple outputs with the same value
 sameValuePayoutTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 sameValuePayoutTest (wa, wb, wf) = do
   nonce <- forAllQ arbitraryQ
-  let channelId = getChannelId $ getChannel [wa, wb] nonce
-  action $ Open wf [wa, wb] channelId [minAda, minAda] defaultTimeLock nonce
+  let cid = getChannelId $ getChannel [wa, wb] nonce
+  action $ Open wf [wa, wb] cid [minAda, minAda] defaultTimeLock nonce
   action Finalize
   ct <- (^. chanToken) <$> requireGetChannel "channel must be available after finalization"
-  action $ Close wb [wa, wb] channelId ct
+  action $ Close wb [wa, wb] cid ct
 
 -- | honestPaymentTest test scenario:
 -- | a third party opens a channel between A and B,
@@ -62,9 +61,9 @@ sameValuePayoutTest (wa, wb, wf) = do
 honestPaymentTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 honestPaymentTest (wa, wb, wf) = do
   nonce <- forAllQ arbitraryQ
-  let channelId = getChannelId $ getChannel [wa, wb] nonce
+  let cid = getChannelId $ getChannel [wa, wb] nonce
   (initBalA, initBalB) <- forAllQ $ both chooseQ ((initBalLB, initBalUB), (initBalLB, initBalUB))
-  action $ Open wf [wa, wb] channelId [initBalA, initBalB] defaultTimeLock nonce
+  action $ Open wf [wa, wb] cid [initBalA, initBalB] defaultTimeLock nonce
   modChSt <-
     requireWithChannel
       "channel must be available after opening"
@@ -72,7 +71,7 @@ honestPaymentTest (wa, wb, wf) = do
   action $ Update modChSt
   action Finalize
   ct <- (^. chanToken) <$> requireGetChannel "channel must be available after finalization"
-  action $ Close wb [wa, wb] channelId ct
+  action $ Close wb [wa, wb] cid ct
 
 -- | singleDisputeTest test scenario:
 -- | a third party opens a channel between A and B,
@@ -84,9 +83,9 @@ honestPaymentTest (wa, wb, wf) = do
 singleDisputeTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 singleDisputeTest (wa, wb, wf) = do
   nonce <- forAllQ arbitraryQ
-  let channelId = getChannelId $ getChannel [wa, wb] nonce
+  let cid = getChannelId $ getChannel [wa, wb] nonce
   (initBalA, initBalB) <- forAllQ $ both chooseQ ((initBalLB, initBalUB), (initBalLB, initBalUB))
-  action $ Open wf [wa, wb] channelId [initBalA, initBalB] defaultTimeLock nonce
+  action $ Open wf [wa, wb] cid [initBalA, initBalB] defaultTimeLock nonce
 
   modChSt <-
     requireWithChannel
@@ -95,9 +94,9 @@ singleDisputeTest (wa, wb, wf) = do
   chSt <- requireGetChannel "channel must be available after opening"
 
   action $ Update modChSt
-  action $ Dispute wb [wa, wb] channelId modChSt (chSt ^. chanToken) 
+  action $ Dispute wb [wa, wb] cid modChSt (chSt ^. chanToken)
   action $ Wait defaultTimeLockSlots
-  action $ ForceClose wb [wa, wb] channelId (chSt ^. chanToken) 
+  action $ ForceClose wb [wa, wb] cid (chSt ^. chanToken)
 
 -- | maliciousDisputeTest test scenario:
 -- | a third party opens a channel between A and B,
@@ -111,9 +110,9 @@ singleDisputeTest (wa, wb, wf) = do
 maliciousDisputeTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 maliciousDisputeTest (wa, wb, wf) = do
   nonce <- forAllQ arbitraryQ
-  let channelId = getChannelId $ getChannel [wa, wb] nonce
+  let cid = getChannelId $ getChannel [wa, wb] nonce
   (initBalA, initBalB) <- forAllQ $ both chooseQ ((initBalLB, initBalUB), (initBalLB, initBalUB))
-  action $ Open wf [wa, wb] channelId [initBalA, initBalB] defaultTimeLock nonce
+  action $ Open wf [wa, wb] cid [initBalA, initBalB] defaultTimeLock nonce
 
   ct <- (^. chanToken) <$> requireGetChannel "channel must be available after finalization"
 
@@ -132,12 +131,12 @@ maliciousDisputeTest (wa, wb, wf) = do
           )
   action $ Update secondUpdate
 
-  action $ Dispute wa [wa, wb] channelId firstUpdate ct
+  action $ Dispute wa [wa, wb] cid firstUpdate ct
   action $ Wait 1
-  action $ Dispute wb [wa, wb] channelId secondUpdate ct
+  action $ Dispute wb [wa, wb] cid secondUpdate ct
 
   action $ Wait defaultTimeLockSlots
-  action $ ForceClose wb [wa, wb] channelId ct
+  action $ ForceClose wb [wa, wb] cid ct
 
 -- | twoPartyFundingAndPaymentTest test scenario:
 -- | A starts a channel between A and B providing A's funds,
@@ -148,19 +147,19 @@ maliciousDisputeTest (wa, wb, wf) = do
 twoPartyFundingAndPaymentTest :: (Wallet, Wallet) -> DL PerunModel ()
 twoPartyFundingAndPaymentTest (wa, wb) = do
   nonce <- forAllQ arbitraryQ
-  let channelId = getChannelId $ getChannel [wa, wb] nonce
+  let cid = getChannelId $ getChannel [wa, wb] nonce
   (initBalA, initBalB) <- forAllQ $ both chooseQ ((initBalLB, initBalUB), (initBalLB, initBalUB))
-  action $ Start [wa, wb] channelId [initBalA, initBalB] defaultTimeLock nonce
+  action $ Start [wa, wb] cid [initBalA, initBalB] defaultTimeLock nonce
 
   ct <- (^. chanToken) <$> requireGetChannel "channel must be available after finalization"
-  action $ Fund wb 1 channelId ct
+  action $ Fund wb 1 cid ct
   modChSt <-
     requireWithChannel
       "channel must be available after opening"
       (\(PerunModelState cs _ _ _ _ _) -> forAllQ (chooseQ (0, initBalA - minAda)) >>= aPaysB cs)
   action $ Update modChSt
   action Finalize
-  action $ Close wb [wa, wb] channelId ct
+  action $ Close wb [wa, wb] cid ct
 
 -- | twoPartyFundingAndPaymentTest test scenario:
 -- | A starts a channel between A and B and C providing A's funds,
@@ -172,21 +171,21 @@ twoPartyFundingAndPaymentTest (wa, wb) = do
 threePartyFundingAndPaymentTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 threePartyFundingAndPaymentTest (wa, wb, wc) = do
   nonce <- forAllQ arbitraryQ
-  let channelId = getChannelId $ getChannel [wa, wb, wc] nonce
+  let cid = getChannelId $ getChannel [wa, wb, wc] nonce
   [initBalA, initBalB, initBalC] <- forAllQ $ map chooseQ [(initBalLB, initBalUB), (initBalLB, initBalUB), (initBalLB, initBalUB)]
-  action $ Start [wa, wb, wc] channelId [initBalA, initBalB, initBalC] defaultTimeLock nonce
+  action $ Start [wa, wb, wc] cid [initBalA, initBalB, initBalC] defaultTimeLock nonce
 
   ct <- (^. chanToken) <$> requireGetChannel "channel must be available after finalization"
 
-  action $ Fund wb 1 channelId ct
-  action $ Fund wc 2 channelId ct
+  action $ Fund wb 1 cid ct
+  action $ Fund wc 2 cid ct
   modChSt <-
     requireWithChannel
       "channel must be available after opening"
       (\(PerunModelState cs _ _ _ _ _) -> forAllQ (chooseQ (0, initBalA - minAda)) >>= aPaysB cs)
   action $ Update modChSt
   action Finalize
-  action $ Close wb [wa, wb, wc] channelId ct
+  action $ Close wb [wa, wb, wc] cid ct
 
 -- | twoPartyFundingAbortTest test scenario:
 -- | A starts a channel between A and B providing A's funds,
@@ -195,13 +194,13 @@ threePartyFundingAndPaymentTest (wa, wb, wc) = do
 twoPartyFundingAbortTest :: (Wallet, Wallet) -> DL PerunModel ()
 twoPartyFundingAbortTest (wa, wb) = do
   nonce <- forAllQ arbitraryQ
-  let channelId = getChannelId $ getChannel [wa, wb] nonce
+  let cid = getChannelId $ getChannel [wa, wb] nonce
   (initBalA, initBalB) <- forAllQ $ both chooseQ ((initBalLB, initBalUB), (initBalLB, initBalUB))
-  action $ Start [wa, wb] channelId [initBalA, initBalB] defaultTimeLock nonce
-  
+  action $ Start [wa, wb] cid [initBalA, initBalB] defaultTimeLock nonce
+
   ct <- (^. chanToken) <$> requireGetChannel "channel must be available after finalization"
 
-  action $ Abort wa [wa, wb] channelId ct
+  action $ Abort wa [wa, wb] cid ct
 
 -- | twoPartyFundingAbortTest test scenario:
 -- | A starts a channel between A and B and C providing A's funds,
@@ -211,15 +210,15 @@ twoPartyFundingAbortTest (wa, wb) = do
 threePartyFundingAbortTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 threePartyFundingAbortTest (wa, wb, wc) = do
   nonce <- forAllQ arbitraryQ
-  let channelId = getChannelId $ getChannel [wa, wb, wc] nonce
+  let cid = getChannelId $ getChannel [wa, wb, wc] nonce
   [initBalA, initBalB, initBalC] <- forAllQ $ map chooseQ [(initBalLB, initBalUB), (initBalLB, initBalUB), (initBalLB, initBalUB)]
-  action $ Start [wa, wb, wc] channelId [initBalA, initBalB, initBalC] defaultTimeLock nonce
+  action $ Start [wa, wb, wc] cid [initBalA, initBalB, initBalC] defaultTimeLock nonce
 
   ct <- (^. chanToken) <$> requireGetChannel "channel must be available after finalization"
 
 
-  action $ Fund wb 1 channelId ct
-  action $ Abort wb [wa, wb, wc] channelId ct
+  action $ Fund wb 1 cid ct
+  action $ Abort wb [wa, wb, wc] cid ct
 
 -- | maliciousWalletTest performs various actions that are considered malicious
 -- | as they either try to cheat or otherwise attack the integrity of the
@@ -228,38 +227,38 @@ threePartyFundingAbortTest (wa, wb, wc) = do
 maliciousWalletTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 maliciousWalletTest (wa, wb, wc) = do
   nonce <- forAllQ arbitraryQ
-  let channelId = getChannelId $ getChannel [wa, wb] nonce
+  let cid = getChannelId $ getChannel [wa, wb] nonce
   [initBalA, initBalB] <- forAllQ $ map chooseQ [(initBalLB, initBalUB), (initBalLB, initBalUB)]
   let chanBals = [initBalA, initBalB]
-  action $ Start [wa, wb] channelId [initBalA, initBalB] defaultTimeLock nonce
+  action $ Start [wa, wb] cid [initBalA, initBalB] defaultTimeLock nonce
   ct <- (^. chanToken) <$> requireGetChannel "channel must be available after finalization"
 
-  action $ MaliciousFund 1 wb channelId 1 FundSteal
-  action $ MaliciousFund 1 wb channelId 1 FundViolateChannelIntegrity
-  action $ MaliciousFund 1 wb channelId 1 FundInvalidFunded
-  action $ MaliciousAbort 2 wc channelId AbortUnrelatedParticipant
-  action $ MaliciousClose 1 wb channelId [wa, wb] chanBals CloseUnfunded
-  action $ MaliciousAbort 1 wb channelId AbortInvalidFunding
-  action $ MaliciousForceClose 1 wb channelId ForceCloseInvalidInput
-  action $ MaliciousForceClose 1 wb channelId ForceCloseValidInput
-  action $ MaliciousDispute 1 wb channelId [wa, wb] chanBals DisputeValidInput
-  action $ Fund wb 1 channelId ct
+  action $ MaliciousFund 1 wb cid 1 FundSteal
+  action $ MaliciousFund 1 wb cid 1 FundViolateChannelIntegrity
+  action $ MaliciousFund 1 wb cid 1 FundInvalidFunded
+  action $ MaliciousAbort 2 wc cid AbortUnrelatedParticipant
+  action $ MaliciousClose 1 wb cid [wa, wb] chanBals CloseUnfunded
+  action $ MaliciousAbort 1 wb cid AbortInvalidFunding
+  action $ MaliciousForceClose 1 wb cid ForceCloseInvalidInput
+  action $ MaliciousForceClose 1 wb cid ForceCloseValidInput
+  action $ MaliciousDispute 1 wb cid [wa, wb] chanBals DisputeValidInput
+  action $ Fund wb 1 cid ct
   action $ Wait 1
-  action $ MaliciousAbort 1 wb channelId AbortAlreadyFunded
-  action $ MaliciousForceClose 1 wb channelId ForceCloseValidInput
-  action $ MaliciousFund 1 wb channelId 1 FundAlreadyFunded
-  action $ MaliciousClose 1 wb channelId [wa, wb] chanBals CloseInvalidInputValue
-  action $ MaliciousForceClose 1 wb channelId ForceCloseInvalidInput
-  action $ MaliciousDispute 1 wb channelId [wa, wb] chanBals DisputeInvalidInput
-  action $ MaliciousDispute 1 wb channelId [wa, wb] chanBals DisputeValidInput
-  action $ MaliciousDispute 1 wb channelId [wa, wb] chanBals DisputeWrongState
+  action $ MaliciousAbort 1 wb cid AbortAlreadyFunded
+  action $ MaliciousForceClose 1 wb cid ForceCloseValidInput
+  action $ MaliciousFund 1 wb cid 1 FundAlreadyFunded
+  action $ MaliciousClose 1 wb cid [wa, wb] chanBals CloseInvalidInputValue
+  action $ MaliciousForceClose 1 wb cid ForceCloseInvalidInput
+  action $ MaliciousDispute 1 wb cid [wa, wb] chanBals DisputeInvalidInput
+  action $ MaliciousDispute 1 wb cid [wa, wb] chanBals DisputeValidInput
+  action $ MaliciousDispute 1 wb cid [wa, wb] chanBals DisputeWrongState
   modChSt <-
     requireWithChannel
       "channel must be available after opening"
       (\(PerunModelState cs _ _ _ _ _) -> forAllQ (chooseQ (0, initBalA - minAda)) >>= aPaysB cs)
   action $ Update modChSt
   action Finalize
-  action $ Close wa [wa, wb] channelId ct
+  action $ Close wa [wa, wb] cid ct
 
 getChannel :: [Wallet] -> Integer -> Channel
 getChannel wallets nonce =

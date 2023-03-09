@@ -19,7 +19,6 @@ import Data.Default
 import Data.Either (rights)
 import Data.List (find, foldl')
 import qualified Data.Map.Strict as Map
-import Data.Maybe
 import Ledger hiding (ChainIndexTxOut)
 import Ledger.Value (assetClassValueOf)
 import Perun.Error
@@ -53,8 +52,8 @@ allTxosAt addr = go def
         TxosResponse (Page _ Nothing txoRefs) -> do
           -- No more transactions to fetch.
           return txoRefs
-        TxosResponse (Page _ np txoRefs) -> do
-          (txoRefs ++) <$> go np
+        TxosResponse (Page _ np' txoRefs) -> do
+          (txoRefs ++) <$> go np'
 
 -- | mkTxPools creates possibly multiple transaction pools distinguish by a
 -- ChannelToken for the given channel id using a list of TxOutRefs. This
@@ -77,7 +76,7 @@ mkTxPools cid txoRefs = do
   channelTxs <- rights <$> mapM (mkChannelTx cid) uniqueCitxs
   return . filterValidStart . partitionByChannelToken $ channelTxs
   where
-    filterValidStart = filter (\(ChannelTxPool ct ctxs) -> any isValidStart ctxs)
+    filterValidStart = filter (\(ChannelTxPool _ ctxs) -> any isValidStart ctxs)
     isValidStart (ChannelTx _ Nothing (Just _)) = True
     isValidStart _ = False
 
@@ -161,13 +160,13 @@ resolveInput ::
   [ChainIndexTx] ->
   Either ChannelTxErr (TxOutRef, ChannelAction, ChannelDatum)
 resolveInput cid citx inputCitxs = do
-  let inputs = citx ^. citxInputs
+  let cInputs = citx ^. citxInputs
       ourValidator = channelValidator cid
-  let inputValue (TxOutRef id idx) = do
-        let citxOfInterest = find (\citx -> citx ^. citxTxId == id) inputCitxs
+  let inputValue (TxOutRef txId idx) = do
+        let citxOfInterest = find (\citx' -> citx' ^. citxTxId == txId) inputCitxs
         output <- case citxOfInterest of
           Nothing -> throwError NoChannelInputErr
-          Just citx -> case citx ^. citxOutputs of
+          Just citx' -> case citx' ^. citxOutputs of
             InvalidTx -> throwError InvalidTxErr
             ValidTx outs -> return $ outs !! fromIntegral idx
         return $ citoValue output
@@ -188,7 +187,7 @@ resolveInput cid citx inputCitxs = do
                 return $ Right (ref, tr, d)
             _else -> return $ Left ChannelTxErr
         )
-        inputs
+        cInputs
   case channelInputs of
     [] -> do
       -- We found no channel UTXO as the input to this transaction.
@@ -207,8 +206,7 @@ resolveOutput ::
   ChainIndexTx ->
   Either ChannelTxErr (TxOutRef, ChannelDatum)
 resolveOutput cid citx = do
-  let outputs = citx ^. citxOutputs
-  os <- case outputs of
+  os <- case citx ^. citxOutputs of
     InvalidTx -> throwError UnexpectedInvalidTxErr
     ValidTx os -> return os
   let channelOutputs = rights $ zipWith retrieveChannelOutput [1 ..] os
@@ -242,7 +240,7 @@ resolveOutput cid citx = do
         OutputDatum d -> return d
       cDatum <- case PlutusTx.fromBuiltinData . getDatum $ d of
         Nothing -> throwError InvalidChannelDatumErr
-        Just d -> return d
+        Just cDatum -> return cDatum
       unless (isValidDatum cid cDatum) $ throwError InvalidChannelDatumErr
       unless (hasValidThreadToken cid (channelToken cDatum) (citoValue citxOut)) $ throwError WrongThreadTokenErr
       (txOutRef,) <$> channelDatumFromDatum d
@@ -253,10 +251,6 @@ parseDatumFromOutputDatum citx (OutputDatumHash h) = case Map.lookup h $ citx ^.
   Nothing -> throwError ChannelCorruptedChainIndexErr
   Just d -> return d
 parseDatumFromOutputDatum _ (OutputDatum d) = return d
-
-parseChannelDatumFromOutputDatum :: ChainIndexTx -> OutputDatum -> Either ChannelTxErr ChannelDatum
-parseChannelDatumFromOutputDatum citx o =
-  parseDatumFromOutputDatum citx o >>= channelDatumFromDatum
 
 -- TODO: Add more sanity checks for ChannelDatum.
 -- TODO: Channel might be closed, fix it plz.

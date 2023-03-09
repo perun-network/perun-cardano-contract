@@ -38,10 +38,8 @@ module Perun.Onchain
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON, Value (Bool))
+import Data.Aeson (FromJSON, ToJSON)
 import Data.Data
--- import qualified Ledger.Typed.Scripts as Scripts
-
 import Data.Text (unpack)
 import GHC.Generics (Generic)
 import Ledger
@@ -56,7 +54,6 @@ import Ledger
     PaymentPubKeyHash (..),
     Signature,
     UpperBound (..),
-    Value,
     contains,
     from,
     fromMilliSeconds,
@@ -74,7 +71,6 @@ import Ledger.Value (AssetClass (..), TokenName (..), assetClass, assetClassValu
 import qualified Ledger.Value as Value
 import Playground.Contract (ensureKnownCurrencies, printJson, printSchemas, stage)
 import Plutus.Contract.Oracle (SignedMessage (..), verifySignedMessageConstraints)
-import Plutus.Contract.StateMachine.ThreadToken (threadTokenValue)
 import Plutus.Script.Utils.V2.Address (mkValidatorAddress)
 import qualified Plutus.Script.Utils.V2.Scripts as Scripts
 import qualified Plutus.Script.Utils.V2.Typed.Scripts as Scripts hiding (validatorHash)
@@ -96,7 +92,7 @@ import Plutus.V2.Ledger.Tx
   )
 import qualified PlutusTx
 import PlutusTx.Prelude hiding (unless)
-import Schema (FormSchema (..), ToSchema (..))
+import Schema (ToSchema (..))
 import Text.Hex (encodeHex)
 import qualified Prelude as P
 

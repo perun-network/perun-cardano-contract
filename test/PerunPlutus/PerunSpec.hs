@@ -44,7 +44,6 @@ import PlutusTx.Prelude hiding (mapM, unless)
 import Wallet.Emulator.MultiAgent as Emulator
 import qualified Wallet.Emulator.Wallet as Trace
 import qualified Prelude as P
-import Data.ByteString.Char8 (hPut)
 
 wallets :: [Wallet]
 wallets = [w1, w2, w3]

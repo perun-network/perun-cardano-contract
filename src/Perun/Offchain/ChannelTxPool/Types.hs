@@ -6,7 +6,6 @@ import Control.Lens.TH
 import Ledger (TxOutRef)
 import Perun.Onchain
 import Plutus.ChainIndex hiding (txFromTxId)
-import Plutus.ChainIndex.Api
 
 -- | ChannelTxPool is a pool of ChannelTxs for a specific channel id.
 -- Following invariants hold:

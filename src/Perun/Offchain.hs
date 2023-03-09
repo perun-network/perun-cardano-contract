@@ -1,46 +1,37 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
 {-# HLINT ignore "Redundant bracket" #-}
 
 module Perun.Offchain where
 
 import Control.Monad as CM hiding (fmap)
 import Control.Monad.Error.Lens
-import Data.Aeson (FromJSON, ToJSON, encode)
-import Data.Monoid (Last (..))
-import Data.Default
-import Data.Either (fromRight)
+import Data.Aeson (FromJSON, ToJSON)
 import Data.List (genericSplitAt)
 import qualified Data.Map as Map
-import Data.Maybe (catMaybes, fromJust)
-import Data.Text (Text, pack, unpack)
+import Data.Maybe (fromJust)
+import Data.Monoid (Last (..))
+import Data.Text (Text)
 import GHC.Generics (Generic)
 import Ledger hiding (singleton)
 import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
 import Ledger.Constraints.OffChain ()
 import qualified Ledger.Scripts as S
-import Ledger.Value (AssetClass (..), TokenName (..), assetClass, tokenName, valueOf)
+import Ledger.Value (AssetClass (..), valueOf)
 import Perun.Error
 import Perun.Onchain
 import Plutus.ChainIndex.Types hiding (ChainIndexTxOut)
 import Plutus.Contract
-import Plutus.Contract.Effects (ChainIndexQuery (..), ChainIndexResponse (TxIdResponse), PABReq (..), _ChainIndexQueryResp)
-import Plutus.Contract.Request (pabReq, txoRefsAt)
-import Plutus.Contract.Util (loopM)
-import qualified Plutus.Script.Utils.V1.Typed.Scripts as Typed
-import qualified Plutus.Script.Utils.V2.Typed.Scripts as Scripts
-import Plutus.V2.Ledger.Api (BuiltinByteString, ToData (toBuiltinData))
-import Plutus.Contract.Wallet (getUnspentOutput)
+import Plutus.Contract.Oracle (SignedMessage (..))
 import qualified PlutusTx
 import PlutusTx.Prelude hiding (unless)
 import Schema (ToSchema)
 import Text.Hex (encodeHex)
 import Text.Printf (printf)
 import qualified Prelude as P
-import Plutus.Contract (ownUtxos)
-import Plutus.Contract.Oracle (SignedMessage (..))
 
 --
 --
@@ -71,7 +62,7 @@ data FundParams = FundParams
   deriving (Generic, ToJSON, FromJSON, ToSchema)
   deriving stock (P.Eq, P.Show)
 
-data AbortParams = AbortParams 
+data AbortParams = AbortParams
   { apChannelId :: !ChannelID,
     apChannelToken :: !AssetClass
   }
@@ -104,7 +95,7 @@ data CloseParams = CloseParams
   deriving (Generic, ToJSON, FromJSON, ToSchema)
   deriving stock (P.Eq, P.Show)
 
-data ForceCloseParams = ForceCloseParams 
+data ForceCloseParams = ForceCloseParams
   { fcpChannelId :: !ChannelID,
     fcpChanelToken :: !AssetClass
   }
@@ -448,9 +439,8 @@ findChannelWithSync cid =
       retryAfterSync $ findChannel cid
     errorHandler err = throwing _PerunError err
 
-
 -- | findChannelWithSync' is an optimistic findChannel handler. It first tries
--- to find a valid channel for the given channel id and thread token and if not successful, 
+-- to find a valid channel for the given channel id and thread token and if not successful,
 -- retries it again AFTER making sure to synchronize with the chainindex to its current slot.
 findChannelWithSync' ::
   (AsPerunError e, AsContractError e) =>
@@ -466,7 +456,7 @@ findChannelWithSync' cid ct =
     errorHandler err = throwing _PerunError err
 
 getChannelId :: Channel -> ChannelID
-getChannelId channel = ChannelID . S.dataHash $ toBuiltinData channel
+getChannelId channel = ChannelID . S.dataHash $ PlutusTx.toBuiltinData channel
 
 findChannel ::
   (AsPerunError e, AsContractError e) =>
@@ -500,10 +490,10 @@ findChannel' cID ct = do
   where
     filterChannelUtxos :: (AsPerunError e, AsContractError e) => [(TxOutRef, ChainIndexTxOut)] -> Contract w s e (TxOutRef, ChainIndexTxOut, ChannelDatum)
     filterChannelUtxos [] = throwing _FindChannelError NoUTXOsError
-    filterChannelUtxos ((oref, o):xs) = do
+    filterChannelUtxos ((oref, o) : xs) = do
       let AssetClass (s, tn) = ct
-      if valueOf (_ciTxOutValue o) s tn == 1 then
-        -- Note: If any check fails at this point, we can safely throw an error
+      if valueOf (_ciTxOutValue o) s tn == 1
+        then -- Note: If any check fails at this point, we can safely throw an error
         -- because we know that the utxo at this address carries the ThreadToken.AbortCase
         -- Therefore, no other utxo can carry the ThreadToken, as it is an NFT.
         case _ciTxOutScriptDatum o of
@@ -511,8 +501,7 @@ findChannel' cID ct = do
             Nothing -> throwing _FindChannelError WrongDatumTypeError
             Just d@ChannelDatum {..} -> if (channelTokenAsset channelToken) == ct && cID == getChannelId channelParameters && (channelTokenName (channelHash cID)) == tn then return (oref, o, d) else throwing _FindChannelError InvalidDatumError
           _otherwise -> throwing _FindChannelError DatumMissingError
-      else filterChannelUtxos xs
-
+        else filterChannelUtxos xs
 
 addFunding :: Integer -> Integer -> [Integer] -> [Integer]
 addFunding amount idx f =
@@ -555,14 +544,14 @@ compressSignatures (AllSignedStates sst) = SignedState (map (\(SignedMessage sig
 -- and the given *single* channel output is a valid opening transaction for a channel with
 -- the given channel id.
 isValidChannelStart :: [TxOutRef] -> (Address, Value, ChannelDatum) -> ChannelID -> Bool
-isValidChannelStart inputs (outAddress, outValue, ChannelDatum{..}) cId =
+isValidChannelStart inputs (outAddress, outValue, ChannelDatum {..}) cId =
   let ref = ctTxOutRef channelToken
       s = channelTokenSymbol ref
-      tn = channelTokenName (channelHash cId) in
-    ref `elem` inputs &&
-    getChannelId channelParameters == cId &&
-    outAddress == channelAddress cId &&
-    valueOf outValue s tn == 1 &&
-    channelToken == ChannelToken s tn ref &&
-    not disputed && 
-    False -- TODO: Complete these checks! 
+      tn = channelTokenName (channelHash cId)
+   in ref `elem` inputs
+        && getChannelId channelParameters == cId
+        && outAddress == channelAddress cId
+        && valueOf outValue s tn == 1
+        && channelToken == ChannelToken s tn ref
+        && not disputed
+        && False -- TODO: Complete these checks!

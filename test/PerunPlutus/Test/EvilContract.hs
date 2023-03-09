@@ -17,7 +17,6 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Data
 import Data.Map as Map hiding (map)
 import qualified Data.Semigroup as Semigroup
-import Data.Text (Text)
 import GHC.Generics (Generic)
 import Ledger
 import Ledger.Ada as Ada
@@ -30,7 +29,6 @@ import qualified PlutusTx
 import PlutusTx.Prelude
 import Text.Printf (printf)
 import qualified Prelude as P
-import Perun.Offchain (AllSignedStates (..), compressSignatures)
 
 type EvilContractState = Maybe (Semigroup.Last TxId)
 
@@ -172,9 +170,9 @@ dropIndex :: Integer -> [a] -> Maybe [a]
 dropIndex idx as | idx P.< 0 P.|| idx > length as P.|| P.null as = Nothing
 dropIndex idx as = Just $ go idx 0 (as, [])
   where
-    go i ci (a : as, bs)
-      | i P.== ci = reverse bs P.++ as
-      | otherwise = go i (ci P.+ 1) (as, a : bs)
+    go i ci (a : as', bs)
+      | i P.== ci = reverse bs P.++ as'
+      | otherwise = go i (ci P.+ 1) (as', a : bs)
     go _ _ _ = P.error "impossible"
 
 abort :: EvilAbort -> Contract EvilContractState s PerunError ()
@@ -213,8 +211,8 @@ closeUnfunded cid sst bals = do
   let newDatum = d
       r = Scripts.Redeemer . PlutusTx.toBuiltinData . MkClose $ compressSignatures sst
       v = Ada.toValue minAdaTxOut
-      (lookup, tx) = uncheckedTx newDatum r cid v oref o
-  ledgerTx <- submitTxConstraintsWith lookup (tx <> mconcat (zipWith Constraints.mustPayToPubKey (pPaymentPKs channelParameters) (map Ada.lovelaceValueOf bals)))
+      (lookups, tx) = uncheckedTx newDatum r cid v oref o
+  ledgerTx <- submitTxConstraintsWith lookups (tx <> mconcat (zipWith Constraints.mustPayToPubKey (pPaymentPKs channelParameters) (map Ada.lovelaceValueOf bals)))
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
   tell . Just . Semigroup.Last . getCardanoTxId $ ledgerTx
   logInfo @P.String "EVIL_CONTRACT: executed malicious close"
@@ -278,8 +276,8 @@ disputeWrongState cid sst = do
   disputeWithDatum oref o cid sst $ d {state = ChannelState (ChannelID "abc") [] 0 False}
 
 disputeValidInput :: ChannelID -> AllSignedStates -> [PaymentPubKey] -> Contract EvilContractState s PerunError ()
-disputeValidInput cid sst keys = do
-  let dState = extractVerifiedState (compressSignatures sst) keys
+disputeValidInput cid sst pubkeys = do
+  let dState = extractVerifiedState (compressSignatures sst) pubkeys
   t <- currentTime
   (oref, o, d) <- findChannel cid
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)

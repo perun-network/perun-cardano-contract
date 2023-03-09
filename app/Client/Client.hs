@@ -39,9 +39,7 @@ import Perun.Onchain
 import Plutus.Contract.Oracle
 import Plutus.PAB.Events.ContractInstanceState (PartiallyDecodedResponse (..))
 import Plutus.PAB.Webserver.Client
-import Plutus.PAB.Webserver.Client (InstanceClient (getInstanceStatus))
 import Plutus.PAB.Webserver.Types
-import Plutus.PAB.Webserver.Types (ContractInstanceClientState (cicCurrentState))
 import Servant.Client
 import Wallet.Emulator.Wallet
 import Wallet.Types (ContractInstanceId)

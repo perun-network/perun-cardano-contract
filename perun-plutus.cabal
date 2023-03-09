@@ -36,6 +36,7 @@ common shared
                     -fno-ignore-interface-pragmas
                     -fno-omit-interface-pragmas
                     -fobject-code
+                    -Wno-orphans
 
 executable perun-client
   import:           shared

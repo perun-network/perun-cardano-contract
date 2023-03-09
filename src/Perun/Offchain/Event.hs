@@ -2,7 +2,7 @@ module Perun.Offchain.Event where
 
 import Data.Aeson
 import GHC.Generics
-import Perun.Onchain (ChannelDatum (..), version)
+import Perun.Onchain (ChannelDatum)
 
 -- | ChannelEvent defines channel events which happen on-chain and can be
 -- viewed off-chain.
