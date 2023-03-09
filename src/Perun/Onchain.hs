@@ -1,7 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 
 module Perun.Onchain
   ( Channel (..),
@@ -70,10 +70,11 @@ import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
 import Ledger.Scripts hiding (version)
 import Ledger.Scripts.Orphans ()
-import Ledger.Value (AssetClass(..), TokenName (..), assetClassValueOf, assetClass, geq)
+import Ledger.Value (AssetClass (..), TokenName (..), assetClass, assetClassValueOf, geq)
 import qualified Ledger.Value as Value
 import Playground.Contract (ensureKnownCurrencies, printJson, printSchemas, stage)
 import Plutus.Contract.Oracle (SignedMessage (..), verifySignedMessageConstraints)
+import Plutus.Contract.StateMachine.ThreadToken (threadTokenValue)
 import Plutus.Script.Utils.V2.Address (mkValidatorAddress)
 import qualified Plutus.Script.Utils.V2.Scripts as Scripts
 import qualified Plutus.Script.Utils.V2.Typed.Scripts as Scripts hiding (validatorHash)
@@ -98,7 +99,6 @@ import PlutusTx.Prelude hiding (unless)
 import Schema (FormSchema (..), ToSchema (..))
 import Text.Hex (encodeHex)
 import qualified Prelude as P
-import Plutus.Contract.StateMachine.ThreadToken (threadTokenValue)
 
 --
 --
@@ -119,19 +119,21 @@ PlutusTx.makeLift ''ChannelID
 instance P.Show ChannelID where
   show (ChannelID cid) = unpack . encodeHex $ fromBuiltin cid
 
-
 data ChannelToken = ChannelToken
-  { 
-    ctSymbol :: CurrencySymbol,
+  { ctSymbol :: CurrencySymbol,
     ctName :: TokenName,
     ctTxOutRef :: !TxOutRef
   }
   deriving (Data, Generic, ToJSON, FromJSON, ToSchema, P.Eq, P.Show)
 
+instance P.Ord ChannelToken where
+  {-# INLINEABLE compare #-}
+  compare (ChannelToken a _ _) (ChannelToken b _ _) = compare a b
+
 deriving instance Data TxId
 
 deriving instance Data TxOutRef
-  
+
 instance Eq ChannelToken where
   {-# INLINEABLE (==) #-}
   a == b =
@@ -157,7 +159,6 @@ channelTokenValue' (ChannelToken s t _) = channelTokenValue s t
 {-# INLINEABLE channelTokenValue'' #-}
 channelTokenValue'' :: AssetClass -> Value.Value
 channelTokenValue'' (AssetClass (symbol, name)) = channelTokenValue symbol name
-
 
 -- Parameters of the channel
 data Channel = Channel
@@ -210,9 +211,11 @@ data SignedState = SignedState
 
 instance Eq SignedState where
   {-# INLINEABLE (==) #-}
-  a == b = sigs a == sigs b && 
-            channelState a == channelState b
-            -- TODO: datumHash a == datumHash b
+  a == b =
+    sigs a == sigs b
+      && channelState a == channelState b
+
+-- TODO: datumHash a == datumHash b
 
 instance ToSchema (SignedMessage ChannelState) where
   toSchema = toSchema @(Signature, (DatumHash, ChannelState))
@@ -438,7 +441,6 @@ mkChannelValidator cID oldDatum action ctx =
     correctInputFunding :: Bool
     correctInputFunding = inVal == (Ada.lovelaceValueOf (sum $ funding oldDatum) <> channelTokenValue' (channelToken oldDatum))
 
-
     resolveDatumTarget :: TxOut -> BuiltinData -> (TxOut, ChannelDatum)
     resolveDatumTarget o d = case PlutusTx.fromBuiltinData d of
       Just ad' -> (o, ad')
@@ -614,7 +616,7 @@ mkChannelTokenMintingPolicy oref =
     wrap = Scripts.mkUntypedMintingPolicy @(ValidatorHash, Action)
 
 mkVersionedChannelTokenMintinPolicy :: TxOutRef -> Versioned MintingPolicy
-mkVersionedChannelTokenMintinPolicy oref = Versioned (mkChannelTokenMintingPolicy oref) PlutusV2 
+mkVersionedChannelTokenMintinPolicy oref = Versioned (mkChannelTokenMintingPolicy oref) PlutusV2
 
 channelTokenSymbol :: TxOutRef -> CurrencySymbol
 channelTokenSymbol oref = scriptCurrencySymbol $ mkVersionedChannelTokenMintinPolicy oref
@@ -626,5 +628,3 @@ channelTokenName (ValidatorHash h) = TokenName h
 checkThreadTokenInner :: CurrencySymbol -> ValidatorHash -> Value.Value -> Integer -> Bool
 checkThreadTokenInner symbol (ValidatorHash vHash) vl i =
   Value.valueOf vl symbol (TokenName vHash) == i
-
-

@@ -87,6 +87,7 @@ data SubscriptionException
   | CorruptedChainIndexErr
   | ImpossibleChannelHistory ChannelHistory
   | DivergentChannelHistory
+  | NoOnchainStatesFoundErr
   | ContractEndedErr
   deriving (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
