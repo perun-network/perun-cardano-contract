@@ -146,7 +146,8 @@ main' (CLA aliceWallet bobWallet network) = do
               spTimeLock = defaultTimeLock,
               spNonce = nonce
             }
-
+    -- Run the adjudicator for "alice".
+    subscribeAdjudicator @"alice" chanId
     -- Trace definition.
     withChannelToken @"alice" startParams $ \ct -> do
       let ctAsset = channelTokenAsset ct
