@@ -322,7 +322,7 @@ instance ContractModel PerunModel where
             cid
             (tokenMap channelSymToken)
             pks
-            (AllSignedStates (map (signMessage' chState) sks))
+            (makeAllSignedStates (map (signMessage' chState) sks))
         )
       delay 3
     Close issuer parties cid channelSymToken -> do
@@ -352,7 +352,7 @@ instance ContractModel PerunModel where
         Nothing -> Trace.throwError . Trace.GenericError $ "no channel to close"
         Just pms -> return $ pms ^. chanState
       (_, pks, _) <- verifiedSignedStateAndKeys parties chan
-      requireInvalidTxEndpoint @"close" (handle $ Adversary w) (EvilClose cID (AllSignedStates [signMessage' (ChannelState (ChannelID "abc") [0] 0 False) sk]) pks bals c) "malicious closing should not work"
+      requireInvalidTxEndpoint @"close" (handle $ Adversary w) (EvilClose cID (makeAllSignedStates [signMessage' (ChannelState (ChannelID "abc") [0] 0 False) sk]) pks bals c) "malicious closing should not work"
     MaliciousForceClose _ w cid c -> do
       requireInvalidTxEndpoint @"forceClose" (handle $ Adversary w) (EvilForceClose cid c) "malicious forceClose should not work"
     MaliciousDispute _ w cid parties bals c -> do
@@ -368,7 +368,7 @@ verifiedSignedStateAndKeys parties chan = do
   wss <- mapM Trace.agentState parties
   let sks = map (unPaymentPrivateKey . Trace.ownPaymentPrivateKey) wss
   let pks = map Trace.ownPaymentPublicKey wss
-  return (AllSignedStates (map (signMessage' chan) sks), pks, sks)
+  return (makeAllSignedStates (map (signMessage' chan) sks), pks, sks)
 
 -- | Model does not change!
 invariant :: Spec s ()
