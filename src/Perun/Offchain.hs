@@ -26,6 +26,7 @@ import Perun.Onchain
 import Plutus.ChainIndex.Types hiding (ChainIndexTxOut)
 import Plutus.Contract
 import Plutus.Contract.Oracle (SignedMessage (..))
+import Plutus.Script.Utils.Scripts as Scripts
 import qualified PlutusTx
 import PlutusTx.Prelude hiding (unless)
 import Schema (ToSchema)
@@ -69,9 +70,7 @@ data AbortParams = AbortParams
   deriving (Generic, ToJSON, FromJSON, ToSchema)
   deriving stock (P.Eq, P.Show)
 
-newtype AllSignedStates = AllSignedStates
-  { allSignedStates :: [SignedMessage ChannelState]
-  }
+data AllSignedStates = AllSignedStates !ChannelState ![Signature]
   deriving (Generic, ToJSON, FromJSON)
   deriving stock (P.Eq, P.Show)
 
@@ -538,7 +537,13 @@ contract =
     forceClose' = endpoint @"forceClose" forceClose
 
 compressSignatures :: AllSignedStates -> SignedState
-compressSignatures (AllSignedStates sst) = SignedState (map (\(SignedMessage sig _ _) -> sig) sst) (osmMessageHash (head sst)) (fromJust . PlutusTx.fromBuiltinData . getDatum $ osmDatum (head sst))
+compressSignatures (AllSignedStates state sigs) = SignedState sigs (Scripts.datumHash (Datum (PlutusTx.toBuiltinData state))) state
+
+makeAllSignedStates :: [(SignedMessage ChannelState)] -> AllSignedStates
+makeAllSignedStates sms = let datum = getDatum . osmDatum $ head sms
+                              state = fromJust $ PlutusTx.fromBuiltinData datum
+                            in AllSignedStates state (map osmSignature sms)
+
 
 -- | isValidChannelStart checks if transaction represented by the given list of inputs,
 -- and the given *single* channel output is a valid opening transaction for a channel with
