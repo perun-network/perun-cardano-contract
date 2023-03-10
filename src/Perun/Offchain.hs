@@ -70,7 +70,11 @@ data AbortParams = AbortParams
   deriving (Generic, ToJSON, FromJSON, ToSchema)
   deriving stock (P.Eq, P.Show)
 
-data AllSignedStates = AllSignedStates !ChannelState ![Signature]
+data AllSignedStates = AllSignedStates 
+  {
+    aChannelState :: !ChannelState,
+    aSignatures ::  ![Signature]
+  }
   deriving (Generic, ToJSON, FromJSON)
   deriving stock (P.Eq, P.Show)
 
