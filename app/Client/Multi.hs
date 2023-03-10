@@ -50,7 +50,7 @@ import Data.Proxy
 import Data.Text (pack)
 import GHC.TypeLits
 import Perun (OpenParams)
-import Perun.Offchain (AllSignedStates (..))
+import Perun.Offchain (AllSignedStates (..), makeAllSignedStates)
 import Perun.Onchain
 import Plutus.PAB.Webserver.Types
 import Servant.Client
@@ -150,7 +150,9 @@ subscribeAdjudicator cID = actionBy @actor $ do
   void . liftIO . async $ runAdjudicatorForClient clientState cID
 
 update :: forall actors. (SymbolList actors) => ChannelState -> MultiClient actors AllSignedStates
-update newState = AllSignedStates <$> (mapAllClients @actors $ signState newState)
+update newState = do
+  signedMessages <- (mapAllClients @actors $ signState newState)
+  return $ makeAllSignedStates signedMessages
 
 mapAllClients :: forall actors a. (SymbolList actors) => PerunClient a -> MultiClient actors [a]
 mapAllClients action = do
