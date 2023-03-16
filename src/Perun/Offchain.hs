@@ -32,6 +32,9 @@ import PlutusTx.Prelude hiding (unless)
 import Schema (ToSchema)
 import Text.Hex (encodeHex)
 import Text.Printf (printf)
+import qualified PlutusTx.Builtins as Builtins
+import qualified Data.Binary as Binary
+import qualified Data.ByteString.Lazy as BSL
 import qualified Prelude as P
 
 --
@@ -50,7 +53,7 @@ data OpenParams = OpenParams
     spPaymentPKs :: ![PaymentPubKeyHash],
     spBalances :: ![Integer],
     spTimeLock :: !Integer,
-    spNonce :: !Integer
+    spNonce :: !BuiltinByteString
   }
   deriving (Generic, ToJSON, FromJSON, ToSchema)
   deriving stock (P.Eq, P.Show)
@@ -123,12 +126,17 @@ start ::
   OpenParams ->
   Contract TokenState s e ()
 start OpenParams {..} = do
+  logInfo @P.String $ printf "Called Start for channel-nonce %s" (P.show spNonce)
   unless (all isLegalOutValue spBalances) . throwing_ $ _InsufficientMinimumAdaBalanceError
+  logInfo @P.String $ printf "1"
   now <- currentTime
+  logInfo @P.String $ printf "2"
   utxos <- ownUtxos
+  logInfo @P.String $ printf "3"
   ref <- case Map.toList utxos of
     (oref, _) : _ -> return oref
     [] -> throwing _FindChannelError NoUTXOsError
+  logInfo @P.String $ printf "4"
   let symbol = channelTokenSymbol ref
       hash = channelHash spChannelId
       name = channelTokenName hash
@@ -161,9 +169,13 @@ start OpenParams {..} = do
       v = Ada.lovelaceValueOf (head spBalances) <> tokenVal
       lookups = Constraints.typedValidatorLookups (typedChannelValidator spChannelId) P.<> Constraints.plutusV2OtherScript (channelValidator spChannelId) P.<> Constraints.mintingPolicy (mkVersionedChannelTokenMintinPolicy ref) P.<> Constraints.unspentOutputs utxos
       tx = Constraints.mustPayToTheScript d v <> Constraints.mustMintValueWithRedeemer (Redeemer (PlutusTx.toBuiltinData (hash, Perun.Onchain.Mint))) tokenVal <> Constraints.mustSpendPubKeyOutput ref
+  logInfo @P.String $ printf "5"
   unless (spChannelId == getChannelId c) . throwing_ $ _ChannelIdMismatchError
+  logInfo @P.String $ printf "6"
   ledgerTx <- submitTxConstraintsWith lookups tx
+  logInfo @P.String $ printf "7"
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
+  logInfo @P.String $ printf "8"
   tellToken token
   logInfo @P.String $ printf "Started funding for channel %s with parameters %s and value %s" (P.show spChannelId) (P.show c) (P.show v)
 
@@ -564,3 +576,6 @@ isValidChannelStart inputs (outAddress, outValue, ChannelDatum {..}) cId =
         && channelToken == ChannelToken s tn ref
         && not disputed
         && False -- TODO: Complete these checks!
+
+mkNonceFromInteger :: Integer -> BuiltinByteString
+mkNonceFromInteger = Builtins.toBuiltin . BSL.toStrict . Binary.encode

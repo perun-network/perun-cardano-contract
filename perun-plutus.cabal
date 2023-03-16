@@ -153,6 +153,7 @@ library
                       , openapi3
                       , plutus-pab
                       , hex-text
+                      , binary
     hs-source-dirs:   src
 
 test-suite perun-plutus-test

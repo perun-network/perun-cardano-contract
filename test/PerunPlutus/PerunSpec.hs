@@ -84,7 +84,7 @@ instance ContractModel PerunModel where
     = 
       -- Start the channel (with insufficient funding)
       -- Participants ChanelID Balances Timelock Nonce
-      Start [Wallet] ChannelID [Integer] Integer Integer
+      Start [Wallet] ChannelID [Integer] Integer BuiltinByteString
     | -- Fund the channel
       -- Funder Index ChannelID
       Fund Wallet Integer ChannelID SymToken
@@ -92,7 +92,7 @@ instance ContractModel PerunModel where
       -- Issuer wallets ChannelID
       Abort Wallet [Wallet] ChannelID SymToken
     | -- Open Issuer Participants ChannelID Balances Timelock Nonce
-      Open Wallet [Wallet] ChannelID [Integer] Integer Integer
+      Open Wallet [Wallet] ChannelID [Integer] Integer BuiltinByteString
     | -- Close Issuer Participants ChannelId.
       Close Wallet [Wallet] ChannelID SymToken
     | -- ForceClose Issuer Participants ChannelID.

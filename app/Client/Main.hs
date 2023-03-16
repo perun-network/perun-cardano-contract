@@ -16,6 +16,7 @@ import Client
 import Control.Lens
 import Control.Monad.State
 import Data.Default
+import qualified Data.ByteString.Lazy as BSL
 import Data.Either
 import Data.Proxy
 import Data.Text (Text, pack)
@@ -29,7 +30,7 @@ import Multi
 import Options.Applicative hiding (Success)
 import Options.Applicative.Types
 import Perun (DisputeParams (..), ForceCloseParams (..), FundParams (..))
-import Perun.Offchain (OpenParams (..), getChannelId)
+import Perun.Offchain (OpenParams (..), getChannelId, mkNonceFromInteger)
 import Perun.Onchain (Channel (..), ChannelState (..), channelTokenAsset, ChannelID(..))
 import Plutus.PAB.Types (Config (..), WebserverConfig (..), defaultWebServerConfig)
 import Servant.Client.Core.BaseUrl (BaseUrl (..), Scheme (..))
@@ -160,7 +161,7 @@ fullTestTrace = do
     bobSPK <- actionBy @"bob" $ gets (^. signingPubKey)
     -- Also subscribe to Websocket events for the contract instance of alice.
     async $ subscribeToContractEvents @"alice"
-    nonce <- abs <$> randomM globalStdGen
+    nonce <- mkNonceFromInteger . abs <$> randomM globalStdGen
     -- Endpoint Parameters
     let payPubKeyHashes = [alicePKH, bobPKH]
         signingPKs = [aliceSPK, bobSPK]
@@ -176,6 +177,7 @@ fullTestTrace = do
             }
     -- Run the adjudicator for "alice".
     async $ subscribeAdjudicator @"alice" chanId
+    async $ subscribeAdjudicator @"bob" chanId
     -- Trace definition.
     withChannelToken @"alice" startParams $ \ct -> do
       let ctAsset = channelTokenAsset ct

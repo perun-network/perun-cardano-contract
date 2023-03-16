@@ -14,6 +14,8 @@ import Plutus.Contract.Test.ContractModel
 import Test.QuickCheck
 import Test.Tasty (TestTree)
 import Test.Tasty.QuickCheck
+import Perun.Offchain (mkNonceFromInteger)
+import PlutusTx.Builtins (BuiltinByteString(..))
 
 -- Testcases
 
@@ -35,7 +37,7 @@ defaultTimeLock = defaultTimeLockSlots * 1000
 -- | representations owning exactly equal balance
 samePartySameValuePayoutTest :: (Wallet, Wallet) -> DL PerunModel ()
 samePartySameValuePayoutTest (wa, wf) = do
-  nonce <- forAllQ arbitraryQ
+  nonce <- mkNonceFromInteger <$> forAllQ arbitraryQ
   let cid = getChannelId $ getChannel [wa, wa] nonce
   action $ Open wf [wa, wa] cid [minAda, minAda] defaultTimeLock nonce
   action Finalize
@@ -47,7 +49,7 @@ samePartySameValuePayoutTest (wa, wf) = do
 -- | multiple outputs with the same value
 sameValuePayoutTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 sameValuePayoutTest (wa, wb, wf) = do
-  nonce <- forAllQ arbitraryQ
+  nonce <- mkNonceFromInteger <$> forAllQ arbitraryQ
   let cid = getChannelId $ getChannel [wa, wb] nonce
   action $ Open wf [wa, wb] cid [minAda, minAda] defaultTimeLock nonce
   action Finalize
@@ -60,7 +62,7 @@ sameValuePayoutTest (wa, wb, wf) = do
 -- | on the state after the payment
 honestPaymentTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 honestPaymentTest (wa, wb, wf) = do
-  nonce <- forAllQ arbitraryQ
+  nonce <- mkNonceFromInteger <$> forAllQ arbitraryQ
   let cid = getChannelId $ getChannel [wa, wb] nonce
   (initBalA, initBalB) <- forAllQ $ both chooseQ ((initBalLB, initBalUB), (initBalLB, initBalUB))
   action $ Open wf [wa, wb] cid [initBalA, initBalB] defaultTimeLock nonce
@@ -82,7 +84,7 @@ honestPaymentTest (wa, wb, wf) = do
 -- | B force-closes the channel after waiting for the timelock to expire
 singleDisputeTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 singleDisputeTest (wa, wb, wf) = do
-  nonce <- forAllQ arbitraryQ
+  nonce <- mkNonceFromInteger <$> forAllQ arbitraryQ
   let cid = getChannelId $ getChannel [wa, wb] nonce
   (initBalA, initBalB) <- forAllQ $ both chooseQ ((initBalLB, initBalUB), (initBalLB, initBalUB))
   action $ Open wf [wa, wb] cid [initBalA, initBalB] defaultTimeLock nonce
@@ -109,7 +111,7 @@ singleDisputeTest (wa, wb, wf) = do
 -- | B force-closes the channel after waiting for the timelock to expire
 maliciousDisputeTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 maliciousDisputeTest (wa, wb, wf) = do
-  nonce <- forAllQ arbitraryQ
+  nonce <- mkNonceFromInteger <$> forAllQ arbitraryQ
   let cid = getChannelId $ getChannel [wa, wb] nonce
   (initBalA, initBalB) <- forAllQ $ both chooseQ ((initBalLB, initBalUB), (initBalLB, initBalUB))
   action $ Open wf [wa, wb] cid [initBalA, initBalB] defaultTimeLock nonce
@@ -146,7 +148,7 @@ maliciousDisputeTest (wa, wb, wf) = do
 -- | A and B close the channel together
 twoPartyFundingAndPaymentTest :: (Wallet, Wallet) -> DL PerunModel ()
 twoPartyFundingAndPaymentTest (wa, wb) = do
-  nonce <- forAllQ arbitraryQ
+  nonce <- mkNonceFromInteger <$> forAllQ arbitraryQ
   let cid = getChannelId $ getChannel [wa, wb] nonce
   (initBalA, initBalB) <- forAllQ $ both chooseQ ((initBalLB, initBalUB), (initBalLB, initBalUB))
   action $ Start [wa, wb] cid [initBalA, initBalB] defaultTimeLock nonce
@@ -170,7 +172,7 @@ twoPartyFundingAndPaymentTest (wa, wb) = do
 -- | A, B and C close the channel together
 threePartyFundingAndPaymentTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 threePartyFundingAndPaymentTest (wa, wb, wc) = do
-  nonce <- forAllQ arbitraryQ
+  nonce <- mkNonceFromInteger <$> forAllQ arbitraryQ
   let cid = getChannelId $ getChannel [wa, wb, wc] nonce
   [initBalA, initBalB, initBalC] <- forAllQ $ map chooseQ [(initBalLB, initBalUB), (initBalLB, initBalUB), (initBalLB, initBalUB)]
   action $ Start [wa, wb, wc] cid [initBalA, initBalB, initBalC] defaultTimeLock nonce
@@ -193,7 +195,7 @@ threePartyFundingAndPaymentTest (wa, wb, wc) = do
 -- | A recovers their funds by aborting the channel
 twoPartyFundingAbortTest :: (Wallet, Wallet) -> DL PerunModel ()
 twoPartyFundingAbortTest (wa, wb) = do
-  nonce <- forAllQ arbitraryQ
+  nonce <- mkNonceFromInteger <$> forAllQ arbitraryQ
   let cid = getChannelId $ getChannel [wa, wb] nonce
   (initBalA, initBalB) <- forAllQ $ both chooseQ ((initBalLB, initBalUB), (initBalLB, initBalUB))
   action $ Start [wa, wb] cid [initBalA, initBalB] defaultTimeLock nonce
@@ -209,7 +211,7 @@ twoPartyFundingAbortTest (wa, wb) = do
 -- | B recovers the funds to the respective funders (A and B) by aborting the channel
 threePartyFundingAbortTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 threePartyFundingAbortTest (wa, wb, wc) = do
-  nonce <- forAllQ arbitraryQ
+  nonce <- mkNonceFromInteger <$> forAllQ arbitraryQ
   let cid = getChannelId $ getChannel [wa, wb, wc] nonce
   [initBalA, initBalB, initBalC] <- forAllQ $ map chooseQ [(initBalLB, initBalUB), (initBalLB, initBalUB), (initBalLB, initBalUB)]
   action $ Start [wa, wb, wc] cid [initBalA, initBalB, initBalC] defaultTimeLock nonce
@@ -226,7 +228,7 @@ threePartyFundingAbortTest (wa, wb, wc) = do
 -- | compromise the channel state, i.e. that nothing happens
 maliciousWalletTest :: (Wallet, Wallet, Wallet) -> DL PerunModel ()
 maliciousWalletTest (wa, wb, wc) = do
-  nonce <- forAllQ arbitraryQ
+  nonce <- mkNonceFromInteger <$> forAllQ arbitraryQ
   let cid = getChannelId $ getChannel [wa, wb] nonce
   [initBalA, initBalB] <- forAllQ $ map chooseQ [(initBalLB, initBalUB), (initBalLB, initBalUB)]
   let chanBals = [initBalA, initBalB]
@@ -260,7 +262,7 @@ maliciousWalletTest (wa, wb, wc) = do
   action Finalize
   action $ Close wa [wa, wb] cid ct
 
-getChannel :: [Wallet] -> Integer -> Channel
+getChannel :: [Wallet] -> BuiltinByteString -> Channel
 getChannel wallets nonce =
   let wSigningKeys = map mockWalletPaymentPubKey wallets
       wPaymentKeys = map mockWalletPaymentPubKeyHash wallets

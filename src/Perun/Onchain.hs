@@ -161,7 +161,7 @@ data Channel = Channel
   { pTimeLock :: !Integer,
     pSigningPKs :: ![PaymentPubKey],
     pPaymentPKs :: ![PaymentPubKeyHash],
-    pNonce :: !Integer
+    pNonce :: BuiltinByteString
   }
   deriving (P.Eq, P.Show, Generic, ToJSON, FromJSON)
 
