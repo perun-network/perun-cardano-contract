@@ -5,6 +5,7 @@ module Perun.Error
     FindChannelException (..),
     SubscriptionException (..),
     DatumException (..),
+    ChannelTxErr (..),
     AsPerunError (..),
   )
 where
@@ -85,15 +86,47 @@ data SubscriptionException
   | UnexpectedNumberOfChannelUTXOsErr
   | DatumErr !DatumException
   | CorruptedChainIndexErr
-  | ImpossibleChannelHistory ChannelHistory
+  | NoTxFromTxIdFetchableErr
+  | NoChannelTokenAvailableErr
+  | MismatchedChannelTokenErr
+  | ImpossibleChannelHistory !ChannelHistory
+  | ChannelErr !ChannelTxErr
   | DivergentChannelHistory
+  | MultipleChannelHistoryErr
+  | MultipleChannelStartsErr
   | NoOnchainStatesFoundErr
+  | ParsingChannelActionErr
   | ContractEndedErr
+  | NoInputMatchingOnChainStateRefErr
+  | NoInputMatchingRefErr
+  | InputNotContainingChannelActionErr
+  | ParsingChannelActionRedeemerErr
   deriving (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
 data DatumException
   = NoOutputDatumErr
+  deriving (Eq, Show, Generic)
+  deriving anyclass (ToJSON, FromJSON)
+
+data ChannelTxErr
+  = ChannelTxErr
+  | NoChannelOutputDatumErr
+  | NoChannelInputRedeemerErr
+  | NoChannelInputRefErr
+  | NoRedeemerForInputErr
+  | NoDatumForInputErr
+  | NoOutputMatchinInputErr
+  | NoChannelInputErr
+  | NoStartStateFoundErr
+  | InvalidTxErr
+  | NoChannelOutputErr
+  | UnexpectedInvalidTxErr
+  | ChannelCorruptedChainIndexErr
+  | WrongThreadTokenErr
+  | InvalidChannelDatumErr
+  | InvalidTxOutRefErr
+  | InvalidThreadTokenErr
   deriving (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 

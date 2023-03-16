@@ -8,11 +8,12 @@ where
 import Control.Lens hiding (index, para)
 import Control.Monad (unless)
 import Control.Monad.Error.Lens
-import Data.List (find)
+import Data.Either (rights)
+import Data.List (elemIndex, find)
 import qualified Data.Map.Strict as Map
 import Data.Maybe
 import Data.Text (pack)
-import Ledger hiding (ChainIndexTxOut)
+import Ledger hiding (ChainIndexTxOut, singleton)
 import qualified Ledger.Tx as L
 import Perun.Adjudicator.History
 import Perun.Error
@@ -37,7 +38,9 @@ adjudicatorSubscription ::
   ChannelID ->
   Contract PerunEvent AdjudicatorSchema PerunError ()
 adjudicatorSubscription cID = do
-  let stop = pure $ Right ()
+  let stop = do
+        logInfo @String $ unwords ["stopped listening for channel:", show cID]
+        pure $ Right ()
       continue = pure . Left
       -- onEvents is the callback invoked when the state changes and new events
       -- were fired.
@@ -45,6 +48,10 @@ adjudicatorSubscription cID = do
         tellAndLog cID evs
         -- We stop listening for state changes after the channel has been
         -- concluded.
+        stop
+      onEvents [] = do
+        -- We did not parse any events, we will stop the subscription here with
+        -- an error.
         stop
       onEvents evs = do
         tellAndLog cID evs
@@ -64,10 +71,10 @@ adjudicatorSubscription cID = do
       -- all possible chain event lists.
       getAllOnChainEvents cID >>= loop . head
     Left NoOnchainStatesFoundErr -> do
-      -- The channel in question has no onchain state, so we wait for the
-      -- creation of the channel.
+      -- The channel in question has no onchain state, it is either an already
+      -- concluded channel or an undeployed one.
       logInfo @String $ unwords ["found no state for channel:", show cID]
-      adjudicator cID >>= loop
+      listenToConcludedOrNewChannel cID >>= loop
     Left err -> logError @String $ unwords ["adjudicator error:", show err]
 
 -- | tellAndLog is a helper to log the events and tell them to subscribers of
@@ -79,20 +86,35 @@ tellAndLog ::
   Contract PerunEvent AdjudicatorSchema e ()
 tellAndLog cid events = do
   mapM_ log' events
-  tell events
+  tell . ChannelEventsLast $ events
   where
     log' Created {} = logInfo @String $ unwords ["Created channel", show cid]
     log' Deposited {} = logInfo @String $ unwords ["Deposited into channel", show cid]
     log' Disputed {} = logInfo @String $ unwords ["Disputed channel", show cid]
-    log' Progressed {} = logInfo @String $ unwords ["Progressed channel", show cid]
     log' Concluded {} = logInfo @String $ unwords ["Concluded channel", show cid]
-    log' Withdrawn = logInfo @String $ unwords ["Withdrawn from channel", show cid]
+
+listenToConcludedOrNewChannel :: ChannelID -> Contract PerunEvent AdjudicatorSchema PerunError [ChannelEvent]
+listenToConcludedOrNewChannel cid =
+  getAllOnChainEvents cid >>= \case
+    [] -> do
+      -- The channel does not exist yet, so we wait for it to be created.
+      logInfo @String $ unwords ["Waiting for channel creation:", show cid]
+      adjudicator cid
+    evs -> do
+      -- The channel already existed and was concluded.
+      logInfo @String $ unwords ["Channel already concluded:", show cid]
+      return $ head evs
 
 eventsFromChannelWaitingResult :: ChannelWaitingResult -> Either SubscriptionException [ChannelEvent]
-eventsFromChannelWaitingResult (ChannelTransition action _oldState newState) =
-  deduceEvents $ ChannelStep action (perunState newState) ChannelNil
-eventsFromChannelWaitingResult (ChannelCreated newState) = Right [Created . perunState $ newState]
-eventsFromChannelWaitingResult (ChannelEnded finalState) = Right [Concluded . perunState $ finalState]
+eventsFromChannelWaitingResult (ChannelTransition action oldState newState) =
+  deduceEventsWithStartState (perunState oldState) $ ChannelStep action (perunState newState) ChannelNil
+eventsFromChannelWaitingResult (ChannelCreated newState) = Right [Created . singleton . perunState $ newState]
+eventsFromChannelWaitingResult (ChannelEnded finalState) = Right [Concluded . singleton . perunState $ finalState]
+
+-- This function normally exists in Data.List, but for some reason it is
+-- not available here...
+singleton :: a -> [a]
+singleton = (: [])
 
 -- | adjudicator listens for state changes to the onchain state of the channel.
 adjudicator ::
@@ -124,7 +146,8 @@ waitForUpdate cID = do
           let addr = channelAddress cID
               -- waitForStart waits for the channel to be created.
               waitForStart = promiseBind (utxoIsProduced addr) $ \ciTx -> do
-                logInfo ciTx
+                logInfo @String $ unwords ["No onchain state found for channel:", show cID]
+                logInfo @String "Waiting for channel creation..."
                 logInfo @String $ unwords ["UTXO produced at:", show addr]
                 outRefMaps <-
                   Control.Lens.traverse utxosTxOutTxFromTx ciTx >>= \case
@@ -139,10 +162,13 @@ waitForUpdate cID = do
                 case produced of
                   Left NoStartStateFoundErr -> awaitPromise waitForStart
                   Right newOcs -> return $ ChannelCreated newOcs
-                  Left _err -> throwing _SubscriptionError CorruptedChainIndexErr
+                  Left err -> throwing _SubscriptionError $ ChannelErr err
           waitForStart
         Right currentOcs@(OnChainState ocsTxOutRef) -> do
           promiseBind (utxoIsSpent (Typed.tyTxOutRefRef ocsTxOutRef)) $ \txn -> do
+            logInfo @String $ unwords ["Found onchain state for channel:", show cID]
+            logInfo @String "waiting for channel update..."
+            logInfo @String $ unwords ["UTXO spent in transaction:", show $ _citxTxId txn]
             outRefMap <-
               map projectFst
                 <$> ( utxosTxOutTxFromTx txn >>= \case
@@ -170,18 +196,50 @@ parseChannelAction ::
   ChainIndexTx ->
   Contract PerunEvent s e ChannelAction
 parseChannelAction (OnChainState iref) citx = do
-  let cInputs = citx ^. citxInputs
-      ir = Typed.tyTxOutRefRef iref
-  txIn <- case find ((== ir) . txInRef) cInputs of
-    Just txIn -> return txIn
-    _else -> throwing _SubscriptionError CorruptedChainIndexErr
-  rawAction <- case txInType txIn of
-    Just (ConsumeScriptAddress (Versioned _s _) action _datum) ->
-      return action
-    _else -> throwing _SubscriptionError CorruptedChainIndexErr
-  case PlutusTx.fromBuiltinData . getRedeemer $ rawAction of
-    Just channelAction -> return channelAction
-    Nothing -> throwing _SubscriptionError CorruptedChainIndexErr
+  logInfo @String "Parsing channel action..."
+  handleError errorHandler action
+  where
+    errorHandler _err = do
+      logWarn @String "Could not parse ChannelAction, trying again after sync."
+      retryAfterSync action
+    action = do
+      let cInputs = citx ^. citxInputs
+          ir = Typed.tyTxOutRefRef iref
+      txIn <- case find ((== ir) . txInRef) cInputs of
+        Just txIn -> return txIn
+        _else -> throwing _SubscriptionError NoInputMatchingOnChainStateRefErr
+      logInfo @String $ unwords ["Found channel input:", show txIn]
+      rawAction <- case txInType txIn of
+        Just (ConsumeScriptAddress (Versioned _s _) action _datum) ->
+          return action
+        _else -> parseChannelActionRedeemer (Typed.tyTxOutRefRef iref) citx
+      -- logWarn @String $ unwords ["Could not parse channel action from txInType:", show _else]
+      -- throwing _SubscriptionError InputNotContainingChannelActionErr
+      logInfo @String $ unwords ["Found channel action:", show rawAction]
+      case PlutusTx.fromBuiltinData . getRedeemer $ rawAction of
+        Just channelAction -> do
+          logInfo @String $ unwords ["Parsed channel action:", show channelAction]
+          return channelAction
+        Nothing -> do
+          logWarn @String "Could not parse channel action."
+          throwing _SubscriptionError ParsingChannelActionErr
+
+-- | parseChannelActionRedeemer tries to parse the Perun channel redeemer used
+-- with the given UTXO in the given ChainIndexTx.
+-- This is necessary because the plutus-apps-SDK does not reliably resolve the
+-- `TxInType` for ChainIndexTxs.
+parseChannelActionRedeemer ::
+  (AsPerunError e, AsContractError e) =>
+  TxOutRef ->
+  ChainIndexTx ->
+  Contract PerunEvent s e Redeemer
+parseChannelActionRedeemer ref citx = do
+  idxForRef <- case elemIndex ref . map txInRef . _citxInputs $ citx of
+    Nothing -> throwing _SubscriptionError NoInputMatchingRefErr
+    Just i -> return . fromIntegral $ i
+  case Map.lookup (RedeemerPtr Spend idxForRef) . _citxRedeemers $ citx of
+    Nothing -> throwing _SubscriptionError InputNotContainingChannelActionErr
+    Just r -> return r
 
 -- | getAllOnChainEvents retrieves all on-chain events which might have occured
 -- already for the given ChannelID.
@@ -207,7 +265,7 @@ getAllOnChainEvents cid = do
     handlePastEvents (ChannelTxPool _ct ctxs) = do
       events <- case generateHistory ctxs of
         Left err -> throwing _SubscriptionError err
-        Right hist -> return $ deduceEvents hist
+        Right hist -> return $ deduceEventsFromStart hist
       case events of
         Left err -> throwing _SubscriptionError err
         Right evs -> return evs
@@ -245,7 +303,7 @@ generateHistory hist = do
           -- No transactions in tx pool left, end of ChannelHistory.
           return ChannelNil
         go ctx txPool = do
-          next <- case find (isNextTx ctx) txPool of
+          next <- case find (nextTxFor ctx) txPool of
             Nothing -> do
               -- If we do not find a successor TX in the txPool AND
               -- have things left in the pool, something is not correct
@@ -271,18 +329,18 @@ generateHistory hist = do
             ChannelTx _nCitx Nothing (Just _) -> do
               -- This is not possible, since the txPool should NOT contain the
               -- start of the channel when we reach this point.
-              throwError CorruptedChainIndexErr
+              throwError MultipleChannelStartsErr
             _else -> do
               -- There is no next transaction but we still have txs left in the
               -- txPool.
-              throwError DivergentChannelHistory -- TODO: Use correct error here.
-    isNextTx :: ChannelTx -> ChannelTx -> Bool
-    isNextTx (ChannelTx _citx _ o) (ChannelTx _nCitx ni _) =
-      let isNextTx' = do
-            ref <- fst <$> o
-            nRef <- fst3 <$> ni
-            return $ ref == nRef
-       in fromMaybe False isNextTx'
+              throwError MultipleChannelHistoryErr
+    nextTxFor :: ChannelTx -> ChannelTx -> Bool
+    nextTxFor (ChannelTx _citx _ o) (ChannelTx _nCitx ni _) =
+      let outputContainedInInput = do
+            let searchedRef = txOutRefId . fst <$> o
+                potentialRef = txOutRefId . fst3 <$> ni
+            (==) <$> searchedRef <*> potentialRef
+       in fromMaybe False outputContainedInInput
     fst3 :: (a, b, c) -> a
     fst3 (a, _, _) = a
     isNotThisTx :: ChainIndexTx -> ChannelTx -> Bool
@@ -290,25 +348,21 @@ generateHistory hist = do
     isNotThisTx' :: ChannelTx -> ChannelTx -> Bool
     isNotThisTx' citx = isNotThisTx (citx ^. channelcitx)
 
-deduceEvents :: ChannelHistory -> Either SubscriptionException [ChannelEvent]
-deduceEvents = go Nothing
+deduceEventsFromStart :: ChannelHistory -> Either SubscriptionException [ChannelEvent]
+deduceEventsFromStart (ChannelCreation d h) = (Created [d] :) <$> deduceEventsWithStartState d h
+deduceEventsFromStart history = throwError $ ImpossibleChannelHistory history
+
+deduceEventsWithStartState :: ChannelDatum -> ChannelHistory -> Either SubscriptionException [ChannelEvent]
+deduceEventsWithStartState = go
   where
     go _ ChannelNil = return []
-    go _ (ChannelCreation d h) = (Created d :) <$> go (Just d) h
-    go (Just d') (ChannelStep Fund d h) = (mkDepositList d d' ++) <$> go (Just d) h
-    go _ (ChannelStep (MkDispute _) d h) = (Disputed d :) <$> go (Just d) h
-    go (Just d') (ChannelConclude Abort h) = (Concluded d' :) <$> go (Just d') h
-    go (Just d') (ChannelConclude ForceClose h) = (Concluded d' :) <$> go (Just d') h
-    go (Just d') (ChannelConclude (MkClose _) h) = (Concluded d' :) <$> go (Just d') h
+    go _ (ChannelCreation d h) = (Created [d] :) <$> go d h
+    go d (ChannelStep Fund d' h) = (Deposited [d, d'] :) <$> go d' h
+    go d (ChannelStep (MkDispute _) d' h) = (Disputed [d, d'] :) <$> go d' h
+    go d' (ChannelConclude Abort h) = (Concluded [d'] :) <$> go d' h
+    go d' (ChannelConclude ForceClose h) = (Concluded [d'] :) <$> go d' h
+    go d' (ChannelConclude (MkClose _) h) = (Concluded [d'] :) <$> go d' h
     go _ remainingHistory = throwError $ ImpossibleChannelHistory remainingHistory
-    -- We currently expect every participant to deposit for himself. The
-    -- resulting event list for deposits will always contain a single
-    -- element as long as this restriction is in place.
-    mkDepositList d d' =
-      let newFunding = funding d
-          prevFunding = funding d'
-          lenPrevFunding = length prevFunding
-       in [Deposited d' (fromIntegral lenPrevFunding) (drop lenPrevFunding newFunding)]
 
 -- | getOnChainState returns the current onchain state for the given
 -- ChannelID. It will throw a PerunError if the onchain state is malformed.
@@ -318,7 +372,9 @@ getOnChainState ::
   Contract PerunEvent s e (Either SubscriptionException OnChainState)
 getOnChainState cID = do
   utxoTx <- utxosAt $ channelAddress cID
+  logInfo @String $ unwords ["querying onchain state for channel", show cID]
   let states = getStates cID (typedChannelValidator cID) (Map.toList utxoTx)
+  logInfo @String $ unwords ["found", show . length $ states, "onchain states"]
   return $ chooser states
 
 -- | chooser is responsible for resolving the current contractstate from a list
@@ -340,20 +396,24 @@ chooser ocs =
 
 getStart :: ChannelID -> [(TxOutRef, L.ChainIndexTxOut, ChainIndexTx)] -> Either ChannelTxErr OnChainState
 getStart cid refMap = do
-  ctmap <- mapM resolveChannelToken refMap
+  let ctmap = rights $ map resolveChannelToken refMap
   case find isStartState ctmap of
     Just (_, _, _, _, tyTxOutRef) -> return . OnChainState $ tyTxOutRef
     Nothing -> throwError NoStartStateFoundErr
   where
     tcv = typedChannelValidator cid
+    -- resolveChannelToken identifies if the given txOutRef and ChainIndexTx
+    -- contain a correct channel datum together with some ChannelToken.
     resolveChannelToken (txOutRef, lCiTxOut, citx) = do
       let idx = fromIntegral $ txOutRefIdx txOutRef
+      -- Lookup the ChainIndexTxOut for the given txOutRef.
       ciTxOut <- case citx ^? citxOutputs . _ValidTx . ix idx of
         Nothing -> throwError InvalidTxOutRefErr
         Just ciTxOut -> return ciTxOut
       let rawDatum = citoDatum ciTxOut
       d <- parseDatumFromOutputDatum citx rawDatum
       cd <- channelDatumFromDatum d
+      -- Create the typed TxOutRef version for the given txOutRef.
       tyTxOutRef <- case Typed.typeScriptTxOutRef tcv txOutRef (toTxOut lCiTxOut) d of
         Left _ -> throwError InvalidTxOutRefErr
         Right tyTxOutRef -> return tyTxOutRef
