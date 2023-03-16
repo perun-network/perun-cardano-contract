@@ -55,6 +55,8 @@ executable perun-client
                     , prettyprinter
                     , bytestring
                     , plutus-ledger
+                    , plutus-tx
+                    , base16-bytestring
                     , containers
                     , lens
                     , mtl

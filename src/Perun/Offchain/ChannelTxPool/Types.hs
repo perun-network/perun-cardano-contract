@@ -51,6 +51,7 @@ data ChannelTxDynamic i o = ChannelTx_
     -- its output.
     _channelTxDynamicChannelTxOutRef :: !o
   }
+  deriving (Show)
 
 -- Pattern synonyms to allow hiding the internal representation of ChannelTx
 -- and ChannelTxPool. This ensures that we can use smart constructors to

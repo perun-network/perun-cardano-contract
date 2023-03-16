@@ -17,7 +17,7 @@ import Control.Monad (unless)
 import Control.Monad.Error.Lens (throwing)
 import Data.Default
 import Data.Either (rights)
-import Data.List (find, foldl')
+import Data.List (elemIndex, find, foldl')
 import qualified Data.Map.Strict as Map
 import Ledger hiding (ChainIndexTxOut)
 import Ledger.Value (assetClassValueOf)
@@ -41,7 +41,7 @@ allTxosAt ::
   (AsPerunError e, AsContractError e) =>
   Address ->
   Contract w s e [TxOutRef]
-allTxosAt addr = go def
+allTxosAt addr = go (Just def)
   where
     go Nothing = return []
     go (Just np) = do
@@ -65,20 +65,38 @@ mkTxPools ::
   [TxOutRef] ->
   Contract w s e [ChannelTxPool]
 mkTxPools cid txoRefs = do
-  let resolveTx ref =
-        (txFromTxId . txOutRefId $ ref) >>= \case
-          Nothing -> do
-            -- Abort if the chainindex is corrupted and could not retrieve
-            -- the necessary transactions.
-            throwing _SubscriptionError CorruptedChainIndexErr
-          Just r -> return r
-  uniqueCitxs <- dedup <$> mapM resolveTx txoRefs
+  logInfo @String $ unwords ["mkTxPools", show cid, "with", show . length $ txoRefs]
+  uniqueCitxs <- dedup . concat <$> mapM resolveTx txoRefs
   channelTxs <- rights <$> mapM (mkChannelTx cid) uniqueCitxs
   return . filterValidStart . partitionByChannelToken $ channelTxs
   where
     filterValidStart = filter (\(ChannelTxPool _ ctxs) -> any isValidStart ctxs)
     isValidStart (ChannelTx _ Nothing (Just _)) = True
     isValidStart _ = False
+
+-- | resolveTx resolves a TxOutRef to the transactions that created and
+-- potentially spent it.
+resolveTx ::
+  (AsPerunError e, AsContractError e) =>
+  TxOutRef ->
+  Contract w s e [ChainIndexTx]
+resolveTx ref = do
+  let txid = txOutRefId ref
+  createdTx <-
+    txFromTxId txid >>= \case
+      Nothing -> do
+        -- Abort if the chainindex is corrupted and could not retrieve
+        -- the necessary transactions.
+        throwing _SubscriptionError NoTxFromTxIdFetchableErr
+      Just r -> return r
+  -- TODO: Check if the TxOutRef was already spent. This cannot be implemented
+  -- currently because the ChainIndex does not support querying for TXs that
+  -- consumed some UTXO.
+  --
+  -- utxoIsSpent ref >>= \case
+  --    Nothing -> return [createdTx]
+  --    Just createdTx -> return [createdTx, spentTx]
+  return [createdTx]
 
 partitionByChannelToken ::
   [(ChannelToken, ChannelTx)] ->
@@ -94,38 +112,31 @@ mkChannelTx ::
   ChainIndexTx ->
   Contract w s e (Either ChannelTxErr (ChannelToken, ChannelTx))
 mkChannelTx cid citx = do
-  let resolveTx ref =
-        txFromTxId ref >>= \case
-          Nothing -> do
-            -- Abort if the chainindex is corrupted and could not retrieve
-            -- the necessary transactions.
-            throwing _SubscriptionError CorruptedChainIndexErr
-          Just r -> return r
-  allInputTxs <- mapM (resolveTx . txOutRefId . txInRef) (citx ^. citxInputs)
+  allInputTxs <- mapM (concat . resolveTx . txOutRefId . txInRef) (citx ^. citxInputs)
   i <- case resolveInput cid citx allInputTxs of
     Right i -> return $ Just i
     Left NoChannelInputErr -> return Nothing
-    _else -> throwing _SubscriptionError CorruptedChainIndexErr
+    Left err -> throwing _SubscriptionError $ ChannelErr err
   o <- case resolveOutput cid citx of
     Right o -> return $ Just o
     Left NoChannelOutputErr -> return Nothing
-    _else -> throwing _SubscriptionError CorruptedChainIndexErr
+    Left err -> throwing _SubscriptionError $ ChannelErr err
   ct <- retrieveChannelToken i o
-  (fmap (ct,)) <$> mkChannelTx' i o
+  fmap (ct,) <$> mkChannelTx' i o
   where
     retrieveChannelToken ::
       (AsPerunError e, AsContractError e) =>
       Maybe (TxOutRef, ChannelAction, ChannelDatum) ->
       Maybe (TxOutRef, ChannelDatum) ->
       Contract w s e ChannelToken
-    retrieveChannelToken Nothing Nothing = throwing _SubscriptionError CorruptedChainIndexErr
+    retrieveChannelToken Nothing Nothing = throwing _SubscriptionError NoChannelTokenAvailableErr
     retrieveChannelToken (Just (_, _, d)) Nothing = return $ channelToken d
     retrieveChannelToken Nothing (Just (_, d)) = return $ channelToken d
     retrieveChannelToken (Just (_, _, d)) (Just (_, d')) = do
       let iToken = channelToken d
           oToken = channelToken d'
       unless (iToken == oToken) $
-        throwing _SubscriptionError CorruptedChainIndexErr
+        throwing _SubscriptionError MismatchedChannelTokenErr
       return iToken
     -- mkChannelTx' returns ChannelTxErr if neither an input, nor an output for
     -- a channel was found. This happens if the tx in question was randomly
@@ -138,56 +149,15 @@ mkChannelTx cid citx = do
     mkChannelTx' Nothing Nothing = return $ Left ChannelTxErr
     mkChannelTx' i o = return . Right $ ChannelTx citx i o
 
-data ChannelTxErr
-  = ChannelTxErr
-  | NoChannelOutputDatumErr
-  | NoChannelInputRedeemerErr
-  | NoChannelInputErr
-  | NoStartStateFoundErr
-  | InvalidTxErr
-  | NoChannelOutputErr
-  | UnexpectedInvalidTxErr
-  | ChannelCorruptedChainIndexErr
-  | WrongThreadTokenErr
-  | InvalidChannelDatumErr
-  | InvalidTxOutRefErr
-  | InvalidThreadTokenErr
-  deriving (Show)
-
+-- | resolveInput resolves the input of a ChainIndexTx. It returns the
+-- associated action together with the channel datum.
 resolveInput ::
   ChannelID ->
   ChainIndexTx ->
   [ChainIndexTx] ->
   Either ChannelTxErr (TxOutRef, ChannelAction, ChannelDatum)
 resolveInput cid citx inputCitxs = do
-  let cInputs = citx ^. citxInputs
-      ourValidator = channelValidator cid
-  let inputValue (TxOutRef txId idx) = do
-        let citxOfInterest = find (\citx' -> citx' ^. citxTxId == txId) inputCitxs
-        output <- case citxOfInterest of
-          Nothing -> throwError NoChannelInputErr
-          Just citx' -> case citx' ^. citxOutputs of
-            InvalidTx -> throwError InvalidTxErr
-            ValidTx outs -> return $ outs !! fromIntegral idx
-        return $ citoValue output
-  channelInputs <-
-    rights
-      <$> mapM
-        ( \case
-            TxIn ref (Just (ConsumeScriptAddress (Versioned otherValidator _) r rd))
-              | ourValidator == otherValidator -> do
-                d <- case channelDatumFromDatum rd of
-                  Right d -> return d
-                  Left err -> throwError err
-                tr <- case fromBuiltinData . getRedeemer $ r of
-                  Just tr -> return tr
-                  Nothing -> throwError NoChannelInputRedeemerErr
-                val <- inputValue ref
-                unless (hasValidThreadToken cid (channelToken d) val) $ throwError WrongThreadTokenErr
-                return $ Right (ref, tr, d)
-            _else -> return $ Left ChannelTxErr
-        )
-        cInputs
+  let channelInputs = rights $ map (resolveValidChannelInputs citx) cInputs
   case channelInputs of
     [] -> do
       -- We found no channel UTXO as the input to this transaction.
@@ -200,6 +170,63 @@ resolveInput cid citx inputCitxs = do
       -- We have multiple channel inputs referencing the same channel,
       -- Perun invariant does not hold, abort.
       throwError ChannelTxErr
+  where
+    cInputs = citx ^. citxInputs
+    cOutputs = citx ^? citxOutputs . _ValidTx
+    ourValidator = channelValidator cid
+
+    inputCitx :: TxOutRef -> Either ChannelTxErr ChainIndexTx
+    inputCitx ref = do
+      let citxOfInterest = find (\citx' -> citx' ^. citxTxId == txOutRefId ref) inputCitxs
+      case citxOfInterest of
+        Nothing -> throwError NoChannelInputErr
+        Just citx' -> return citx'
+
+    inputUtxo ref@(TxOutRef txId idx) = do
+      inputCitx ref >>= \citx' -> case citx' ^. citxOutputs of
+        InvalidTx -> throwError InvalidTxErr
+        ValidTx outs -> return $ outs !! fromIntegral idx
+
+    resolveValidChannelInputs :: ChainIndexTx -> TxIn -> Either ChannelTxErr (TxOutRef, ChannelAction, ChannelDatum)
+    resolveValidChannelInputs citx (TxIn ref (Just (ConsumeScriptAddress (Versioned otherValidator _) r rd)))
+      | ourValidator == channelValidator cid = do
+        d <- case channelDatumFromDatum rd of
+          Right d -> return d
+          Left err -> throwError err
+        chanAction <- case fromBuiltinData . getRedeemer $ r of
+          Just tr -> return tr
+          Nothing -> throwError NoChannelInputRedeemerErr
+        iUtxo <- inputUtxo ref
+        unless (hasValidThreadToken cid (channelToken d) (citoValue iUtxo)) $ throwError WrongThreadTokenErr
+        return (ref, chanAction, d)
+    resolveValidChannelInputs nCitx (TxIn ref Nothing) = do
+      iCitx <- inputCitx ref
+      mtype <- resolveTxInType cid ref iCitx nCitx
+      iUtxo <- inputUtxo ref
+      resolveValidChannelInputs nCitx (TxIn ref mtype)
+    resolveValidChannelInputs _ (TxIn ref _) = throwError ChannelTxErr
+
+resolveTxInType :: ChannelID -> TxOutRef -> ChainIndexTx -> ChainIndexTx -> Either ChannelTxErr (Maybe TxInType)
+resolveTxInType cid ref pCitx nCitx = do
+  -- pCitx is predecessor tx of nCitx, which produced ref.
+  idxForRef <- case elemIndex ref . map txInRef . _citxInputs $ nCitx of
+    Nothing -> throwError NoChannelInputRefErr
+    Just idx -> return . fromIntegral $ idx
+  redeemer <- case Map.lookup (RedeemerPtr Spend idxForRef) . _citxRedeemers $ nCitx of
+    Nothing -> throwError NoRedeemerForInputErr
+    Just r -> return r
+  txout <- case pCitx ^? citxOutputs . _ValidTx . ix (fromIntegral $ txOutRefIdx ref) of
+    Nothing -> throwError NoOutputMatchinInputErr
+    Just txout -> return txout
+  datum <- outputDatumToDatum $ citoDatum txout
+  return . Just $ ConsumeScriptAddress (Versioned (channelValidator cid) PlutusV2) redeemer datum
+  where
+    outputDatumToDatum NoOutputDatum = throwError NoDatumForInputErr
+    outputDatumToDatum (OutputDatum d) = return d
+    outputDatumToDatum (OutputDatumHash dh) =
+      case Map.lookup dh . _citxData $ pCitx of
+        Nothing -> throwError NoDatumForInputErr
+        Just d -> return d
 
 resolveOutput ::
   ChannelID ->

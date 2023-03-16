@@ -10,7 +10,7 @@ newtype PerunState = PChannel ChannelDatum
   deriving (Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 
-type PerunEvent = [ChannelEvent]
+type PerunEvent = ChannelEventsLast
 
 perunState :: OnChainState -> ChannelDatum
 perunState (OnChainState ref) = Typed.tyTxOutData . Typed.tyTxOutRefOut $ ref
