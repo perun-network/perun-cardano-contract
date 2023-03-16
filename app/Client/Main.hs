@@ -131,7 +131,7 @@ main' (CLA aliceWallet bobWallet network) = do
     bobPKH <- actionBy @"bob" $ gets (PaymentPubKeyHash . (^. pubKeyHash))
     bobSPK <- actionBy @"bob" $ gets (^. signingPubKey)
     -- Also subscribe to Websocket events for the contract instance of alice.
-    subscribeToContractEvents @"alice"
+    async $ subscribeToContractEvents @"alice"
     nonce <- abs <$> randomM globalStdGen
     -- Endpoint Parameters
     let payPubKeyHashes = [alicePKH, bobPKH]
@@ -147,7 +147,7 @@ main' (CLA aliceWallet bobWallet network) = do
               spNonce = nonce
             }
     -- Run the adjudicator for "alice".
-    subscribeAdjudicator @"alice" chanId
+    async $ subscribeAdjudicator @"alice" chanId
     -- Trace definition.
     withChannelToken @"alice" startParams $ \ct -> do
       let ctAsset = channelTokenAsset ct

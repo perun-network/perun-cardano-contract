@@ -24,6 +24,8 @@ module Multi
     actors,
     MultiClientError (..),
     runMultiClientWith,
+    MultiClient,
+    async,
     delayAll,
     withChannelToken,
     callEndpointFor,
@@ -38,7 +40,7 @@ where
 import Adjudicator
 import Client
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.Async
+import qualified Control.Concurrent.Async as CC
 import Control.Exception (Exception)
 import Control.Lens
 import Control.Logger.Simple
@@ -138,16 +140,21 @@ actionBy action = do
   modify $ actors %~ Map.insert actorKey newState
   return res
 
+async :: forall actors a. (SymbolList actors) => MultiClient actors a -> MultiClient actors ()
+async action = do
+  s <- gets (^. actors)
+  void . liftIO . CC.async . runMultiClientWith @actors (map snd . Map.toList $ s) $ action
+
 subscribeToContractEvents :: forall actor actors. (HasActor actor actors) => MultiClient actors ()
 subscribeToContractEvents = actionBy @actor $ do
   apiUrl <- gets (baseUrl . (^. pabClientEnv))
   cid <- gets (^. instClientId)
-  void . liftIO . async $ runContractSubscription apiUrl cid
+  void . liftIO $ runContractSubscription apiUrl cid
 
 subscribeAdjudicator :: forall actor actors. (HasActor actor actors) => ChannelID -> MultiClient actors ()
 subscribeAdjudicator cID = actionBy @actor $ do
   clientState <- get
-  void . liftIO . async $ runAdjudicatorForClient clientState cID
+  void . liftIO $ runAdjudicatorForClient clientState cID
 
 update :: forall actors. (SymbolList actors) => ChannelState -> MultiClient actors AllSignedStates
 update newState = do
