@@ -112,7 +112,7 @@ mkChannelTx ::
   ChainIndexTx ->
   Contract w s e (Either ChannelTxErr (ChannelToken, ChannelTx))
 mkChannelTx cid citx = do
-  allInputTxs <- mapM (concat . resolveTx . txOutRefId . txInRef) (citx ^. citxInputs)
+  allInputTxs <- concat <$> mapM (resolveTx . txInRef) (citx ^. citxInputs)
   i <- case resolveInput cid citx allInputTxs of
     Right i -> return $ Just i
     Left NoChannelInputErr -> return Nothing
