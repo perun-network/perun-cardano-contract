@@ -16,7 +16,6 @@ import Client
 import Control.Lens
 import Control.Monad.State
 import Data.Default
-import qualified Data.ByteString.Lazy as BSL
 import Data.Either
 import Data.Proxy
 import Data.Text (Text, pack)

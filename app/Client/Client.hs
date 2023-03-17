@@ -14,7 +14,6 @@
 module Client where
 
 import Cardano.Api hiding (Value)
-import Cardano.Api.Shelley hiding (Value)
 import Cardano.Wallet.Api.Client
 import qualified Cardano.Wallet.Api.Types as AT (ApiAddress (id), ApiT (..))
 import qualified Cardano.Wallet.Primitive.Types as Types
