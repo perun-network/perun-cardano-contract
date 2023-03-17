@@ -44,7 +44,7 @@ adjudicatorSubscription cID = do
       continue = pure . Left
       -- onEvents is the callback invoked when the state changes and new events
       -- were fired.
-      onEvents evs@[Concluded _] = do
+      onEvents evs@[Concluded _ _] = do
         tellAndLog cID evs
         -- We stop listening for state changes after the channel has been
         -- concluded.
@@ -106,10 +106,12 @@ listenToConcludedOrNewChannel cid =
       return $ head evs
 
 eventsFromChannelWaitingResult :: ChannelWaitingResult -> Either SubscriptionException [ChannelEvent]
-eventsFromChannelWaitingResult (ChannelTransition action oldState newState) =
+eventsFromChannelWaitingResult (ChannelTransition action oldState newState) = do
   deduceEventsWithStartState (perunState oldState) $ ChannelStep action (perunState newState) ChannelNil
-eventsFromChannelWaitingResult (ChannelCreated newState) = Right [Created . singleton . perunState $ newState]
-eventsFromChannelWaitingResult (ChannelEnded finalState) = Right [Concluded . singleton . perunState $ finalState]
+eventsFromChannelWaitingResult (ChannelCreated newState) =
+  return . singleton $ Created (singleton . perunState $ newState) []
+eventsFromChannelWaitingResult (ChannelEnded finalState) =
+  return . singleton $ Concluded (singleton . perunState $ finalState) []
 
 -- This function normally exists in Data.List, but for some reason it is
 -- not available here...
@@ -210,11 +212,9 @@ parseChannelAction (OnChainState iref) citx = do
         _else -> throwing _SubscriptionError NoInputMatchingOnChainStateRefErr
       logInfo @String $ unwords ["Found channel input:", show txIn]
       rawAction <- case txInType txIn of
-        Just (ConsumeScriptAddress (Versioned _s _) action _datum) ->
-          return action
+        Just (ConsumeScriptAddress (Versioned _s _) rawAction _datum) ->
+          return rawAction
         _else -> parseChannelActionRedeemer (Typed.tyTxOutRefRef iref) citx
-      -- logWarn @String $ unwords ["Could not parse channel action from txInType:", show _else]
-      -- throwing _SubscriptionError InputNotContainingChannelActionErr
       logInfo @String $ unwords ["Found channel action:", show rawAction]
       case PlutusTx.fromBuiltinData . getRedeemer $ rawAction of
         Just channelAction -> do
@@ -349,19 +349,19 @@ generateHistory hist = do
     isNotThisTx' citx = isNotThisTx (citx ^. channelcitx)
 
 deduceEventsFromStart :: ChannelHistory -> Either SubscriptionException [ChannelEvent]
-deduceEventsFromStart (ChannelCreation d h) = (Created [d] :) <$> deduceEventsWithStartState d h
+deduceEventsFromStart (ChannelCreation d h) = (Created [d] [] :) <$> deduceEventsWithStartState d h
 deduceEventsFromStart history = throwError $ ImpossibleChannelHistory history
 
 deduceEventsWithStartState :: ChannelDatum -> ChannelHistory -> Either SubscriptionException [ChannelEvent]
 deduceEventsWithStartState = go
   where
     go _ ChannelNil = return []
-    go _ (ChannelCreation d h) = (Created [d] :) <$> go d h
-    go d (ChannelStep Fund d' h) = (Deposited [d, d'] :) <$> go d' h
-    go d (ChannelStep (MkDispute _) d' h) = (Disputed [d, d'] :) <$> go d' h
-    go d' (ChannelConclude Abort h) = (Concluded [d'] :) <$> go d' h
-    go d' (ChannelConclude ForceClose h) = (Concluded [d'] :) <$> go d' h
-    go d' (ChannelConclude (MkClose _) h) = (Concluded [d'] :) <$> go d' h
+    go _ (ChannelCreation d h) = (Created [d] [] :) <$> go d h
+    go d (ChannelStep Fund d' h) = (Deposited [d, d'] [] :) <$> go d' h
+    go d (ChannelStep (MkDispute ss) d' h) = (Disputed [d, d'] (sigs ss) :) <$> go d' h
+    go d' (ChannelConclude Abort h) = (Concluded [d'] [] :) <$> go d' h
+    go d' (ChannelConclude ForceClose h) = (Concluded [d'] [] :) <$> go d' h
+    go d' (ChannelConclude (MkClose _) h) = (Concluded [d'] [] :) <$> go d' h
     go _ remainingHistory = throwError $ ImpossibleChannelHistory remainingHistory
 
 -- | getOnChainState returns the current onchain state for the given
