@@ -31,7 +31,7 @@ import Data.Monoid (Last (..))
 import Data.Proxy
 import Data.Text (Text, pack)
 import Data.Text.Encoding (encodeUtf8)
-import Ledger.Address (PaymentPrivateKey (..), PaymentPubKey (..))
+import Ledger.Address (PaymentPrivateKey (..), PaymentPubKey (..), PaymentPubKeyHash (..), xprvToPaymentPubKeyHash)
 import Ledger.Crypto (Passphrase, PubKeyHash, generateFromSeed, toPublicKey)
 import Network.HTTP.Client hiding (Proxy)
 import PAB
@@ -113,9 +113,6 @@ withWallet (SomeNetworkDiscriminant (Proxy :: Proxy n)) walletURL pabURL wlt (mn
   addr <- case maddr of
     Nothing -> throwError PerunClientInitAddressDeserializationErr
     Just addr -> return addr
-  pkh <- case shelleyPayAddrToPlutusPubKHash addr of
-    Nothing -> throwError PerunClientInitAddrToPubKHashErr
-    Just pkh -> return pkh
 
   let PabClient
         { activateContract,
@@ -133,6 +130,7 @@ withWallet (SomeNetworkDiscriminant (Proxy :: Proxy n)) walletURL pabURL wlt (mn
 
   let pk = privateKeyFromMnemonic (mnemonic, pp)
       ppk = signingPubKeyFromMnemonic (mnemonic, pp)
+      pkh = unPaymentPubKeyHash . xprvToPaymentPubKeyHash . unPaymentPrivateKey $ pk
 
   return
     PerunClientState
