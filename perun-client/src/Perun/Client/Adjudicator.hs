@@ -6,20 +6,20 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 
-module Adjudicator where
+module Perun.Client.Adjudicator where
 
-import Client
+import Perun.Client.Client
 import Control.Lens
 import Control.Monad.Except
 import Control.Monad.State
 import Data.Text (Text, pack)
-import PAB
+import Perun.PAB
 import Perun.Onchain
 import Plutus.PAB.Webserver.Client
 import Plutus.PAB.Webserver.Types
 import Servant.Client
 import Wallet.Types (ContractInstanceId)
-import Websocket
+import Perun.Websocket
 
 data AdjudicatorState = AdjudicatorState
   { _adjudicatorStateInstClientId :: !ContractInstanceId,

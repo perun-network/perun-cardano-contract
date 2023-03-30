@@ -1,5 +1,5 @@
 cabal-version:      2.4
-name:               perun-plutus
+name:               perun-contract
 version:            0.1.0.0
 
 Tested-With: GHC ==8.10.7
@@ -38,71 +38,22 @@ common shared
                     -fobject-code
                     -Wno-orphans
 
-executable perun-client
-  import:           shared
-  hs-source-dirs:   app/Client
-  other-modules:    Websocket
-                    Client
-                    Adjudicator
-                    Multi
-  build-depends:    perun-plutus
-                    , plutus-contract
-                    , plutus-pab
-                    , simple-logger
-                    , async
-                    , aeson
-                    , random
-                    , prettyprinter
-                    , bytestring
-                    , plutus-ledger
-                    , plutus-tx
-                    , base16-bytestring
-                    , containers
-                    , lens
-                    , mtl
-                    , websockets
-                    , data-default
-                    , openapi3
-                    , servant-client
-                    , servant-client-core
-                    , http-client
-                    , optparse-applicative
-                    , cardano-wallet-core
-                    , cardano-wallet
-                    , cardano-api
-                    , text
-                    , text-class
-                    , playground-common
-  main-is:          Main.hs
-
-executable perun-pab
-  import:           shared
-  hs-source-dirs:   app/PAB
-  build-depends:    perun-plutus
-                    , plutus-contract
-                    , plutus-pab
-                    , aeson
-                    , prettyprinter
-                    , plutus-ledger
-                    , data-default
-                    , openapi3
-  main-is:          Main.hs
-
 library
     import: shared
     exposed-modules: Perun
-                   , PAB
-                   , Orphans
-                   , Perun.Adjudicator
-                   , Perun.Adjudicator.Adjudicator
-                   , Perun.Adjudicator.History
-                   , Perun.Error
-                   , Perun.Offchain
                    , Perun.Onchain
-                   , Perun.Offchain.State
-                   , Perun.Offchain.Event
+                   , Perun.Offchain
                    , Perun.Offchain.ChannelTxPool
-                   , Perun.Offchain.ChannelTxPool.ChannelTxPool
+                   , Perun.Offchain.Event
+                   , Perun.Offchain.State
+                   , Perun.Error
+                   , Perun.Adjudicator
+                   , Perun.Adjudicator.History
+                   , Perun.Adjudicator.Adjudicator
+                   , Perun.Orphans
+
+    -- Modules included in this library but not exported.
+    other-modules:   Perun.Offchain.ChannelTxPool.ChannelTxPool
                    , Perun.Offchain.ChannelTxPool.Types
 
     -- LANGUAGE extensions used by modules in this package.
@@ -156,7 +107,7 @@ library
                       , binary
     hs-source-dirs:   src
 
-test-suite perun-plutus-test
+test-suite perun-contract-test
   import:             shared
   type:               exitcode-stdio-1.0
   hs-source-dirs:     test
@@ -165,16 +116,16 @@ test-suite perun-plutus-test
                       -rtsopts
                       -with-rtsopts=-N
                       -fno-warn-type-defaults
-  other-modules:      PerunPlutus.PerunSpec
-                    , PerunPlutus.TestCases
-                    , PerunPlutus.Test.EvilContract
+  other-modules:      Perun.PerunSpec
+                    , Perun.TestCases
+                    , Perun.Test.EvilContract
   build-depends:      hspec
                     , QuickCheck -any
                     , tasty -any
                     , tasty-hunit -any
                     , tasty-quickcheck -any
                     , cardano-crypto
-                    , perun-plutus
+                    , perun-contract
                     , plutus-contract
                     , aeson
                     , containers

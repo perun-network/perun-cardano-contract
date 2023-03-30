@@ -16,7 +16,7 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 
-module PerunPlutus.PerunSpec where
+module Perun.PerunSpec where
 
 import qualified Cardano.Crypto.Wallet as Crypto
 import Control.Lens hiding (both)
@@ -30,7 +30,7 @@ import qualified Ledger.Ada as Ada
 import qualified Ledger.Value as Value
 import Perun hiding (ChannelAction (..))
 import Perun.Error
-import PerunPlutus.Test.EvilContract
+import Perun.Test.EvilContract
 import Plutus.Contract.Oracle
 import qualified Plutus.Contract.Request as Trace
 import Plutus.Contract.Test (Wallet, mockWalletPaymentPubKey, mockWalletPaymentPubKeyHash, w1, w2, w3, w4)

@@ -10,7 +10,7 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
-module PerunPlutus.Test.EvilContract where
+module Perun.Test.EvilContract where
 
 import Control.Monad hiding (fmap)
 import Data.Aeson (FromJSON, ToJSON)

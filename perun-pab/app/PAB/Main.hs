@@ -2,7 +2,7 @@
 
 module Main where
 
-import PAB (StarterContracts)
+import Perun.PAB (StarterContracts)
 import qualified Plutus.PAB.Effects.Contract.Builtin as Builtin
 import Plutus.PAB.Run (runWith)
 

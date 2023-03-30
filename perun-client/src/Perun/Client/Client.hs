@@ -11,7 +11,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 
-module Client where
+module Perun.Client.Client where
 
 import Cardano.Api hiding (Value)
 import Cardano.Wallet.Api.Client
@@ -33,8 +33,8 @@ import Data.Text.Encoding (encodeUtf8)
 import Ledger.Address (PaymentPrivateKey (..), PaymentPubKey (..), PaymentPubKeyHash (..), xprvToPaymentPubKeyHash)
 import Ledger.Crypto (Passphrase, PubKeyHash, generateFromSeed, toPublicKey)
 import Network.HTTP.Client hiding (Proxy)
-import PAB
 import Perun.Onchain
+import Perun.PAB
 import Plutus.Contract.Oracle
 import Plutus.PAB.Events.ContractInstanceState (PartiallyDecodedResponse (..))
 import Plutus.PAB.Webserver.Client

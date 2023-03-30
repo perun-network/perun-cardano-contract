@@ -17,9 +17,9 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 
--- | Multi is a multi client environment which allows interleaving multiple
+-- | Perun.Client.Multi is a multi client environment which allows interleaving multiple
 -- `PerunClient`s.
-module Multi
+module Perun.Client.Multi
   ( MultiClientState (..),
     actors,
     MultiClientError (..),
@@ -37,8 +37,6 @@ module Multi
   )
 where
 
-import Adjudicator
-import Client
 import Control.Concurrent (threadDelay)
 import qualified Control.Concurrent.Async as CC
 import Control.Exception (Exception)
@@ -51,12 +49,13 @@ import qualified Data.Map.Strict as Map
 import Data.Proxy
 import Data.Text (pack)
 import GHC.TypeLits
-import Perun (OpenParams)
-import Perun.Offchain (AllSignedStates (..), makeAllSignedStates)
+import Perun.Client.Client
+import Perun.Client.Adjudicator
 import Perun.Onchain
+import Perun.Offchain
+import Perun.Websocket
 import Plutus.PAB.Webserver.Types
 import Servant.Client
-import Websocket
 
 newtype MultiClientState = MultiClientState
   { _multiClientStateActors :: Map.Map String PerunClientState

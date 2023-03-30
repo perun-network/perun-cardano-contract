@@ -1,0 +1,80 @@
+cabal-version:      2.4
+name:               perun-pab
+version:            0.1.0.0
+
+Tested-With: GHC ==8.10.7
+
+-- A short (one-line) description of the package.
+-- synopsis:
+
+-- A longer description of the package.
+-- description:
+
+-- A URL where users can report bugs.
+-- bug-reports:
+
+-- The license under which the package is released.
+-- license:
+author:             Jan Bormet
+                    Norbert Dzikowski
+maintainer:         feedback@perun.network
+
+-- A copyright notice.
+-- copyright:
+-- category:
+extra-source-files: CHANGELOG.md
+
+common shared
+  default-language: Haskell2010
+  build-depends:    base ^>=4.14.1.0
+  ghc-options:      -Wall
+                    -- Safe to dis-/enable compiler flags. They mainly solve
+                    -- issues compiling onchain code because depending on the
+                    -- situation plutus-core might not compile due to GHC (Haskell
+                    -- compiler) trying to access definitions used on-chain BEFORE
+                    -- they are known to GHC.
+                    -fno-ignore-interface-pragmas
+                    -fno-omit-interface-pragmas
+                    -fobject-code
+
+executable perun-pab-exe
+  import:           shared
+  hs-source-dirs:   app/PAB
+  build-depends:    perun-contract
+                    , perun-pab
+                    , plutus-contract
+                    , plutus-pab
+                    , aeson
+                    , prettyprinter
+                    , plutus-ledger
+                    , data-default
+                    , openapi3
+  main-is:          Main.hs
+
+library
+    import:           shared
+    exposed-modules:  Perun.PAB
+    build-depends:
+                      , aeson
+                      , perun-contract
+                      , bytestring
+                      , cardano-api
+                      , cardano-wallet
+                      , prettyprinter
+                      , containers
+                      , data-default
+                      , plutus-contract
+                      , plutus-ledger
+                      , plutus-tx-plugin
+                      , plutus-ledger-api
+                      , plutus-ledger-constraints
+                      , plutus-script-utils
+                      , plutus-chain-index-core
+                      , playground-common
+                      , plutus-tx
+                      , lens
+                      , text
+                      , openapi3
+                      , plutus-pab
+                      , hex-text
+    hs-source-dirs:   src/
