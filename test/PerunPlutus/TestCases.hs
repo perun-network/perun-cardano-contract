@@ -7,15 +7,15 @@ module PerunPlutus.TestCases (perunTests) where
 import Control.Lens hiding (both)
 import Data.Tuple.Extra
 import Perun hiding (ChannelAction (..))
+import Perun.Offchain (mkNonceFromInteger)
 import PerunPlutus.PerunSpec
 import PerunPlutus.Test.EvilContract
 import Plutus.Contract.Test
 import Plutus.Contract.Test.ContractModel
+import PlutusTx.Builtins (BuiltinByteString (..))
 import Test.QuickCheck
 import Test.Tasty (TestTree)
 import Test.Tasty.QuickCheck
-import Perun.Offchain (mkNonceFromInteger)
-import PlutusTx.Builtins (BuiltinByteString(..))
 
 -- Testcases
 
@@ -218,7 +218,6 @@ threePartyFundingAbortTest (wa, wb, wc) = do
 
   ct <- (^. chanToken) <$> requireGetChannel "channel must be available after finalization"
 
-
   action $ Fund wb 1 cid ct
   action $ Abort wb [wa, wb, wc] cid ct
 
@@ -306,15 +305,15 @@ prop_TwoPartyFundingAbortTest :: Property
 prop_TwoPartyFundingAbortTest = withMaxSuccess 1 $ forAllDL (twoPartyFundingAbortTest (w1, w2)) propPerun
 
 -- Does not work because of resource limits (size)
---prop_ThreePartyFundingAndPaymentTest :: Property
---prop_ThreePartyFundingAndPaymentTest = withMaxSuccess 1 $ forAllDL (threePartyFundingAndPaymentTest (w1, w2, w3)) propPerun
+-- prop_ThreePartyFundingAndPaymentTest :: Property
+-- prop_ThreePartyFundingAndPaymentTest = withMaxSuccess 1 $ forAllDL (threePartyFundingAndPaymentTest (w1, w2, w3)) propPerun
 
 prop_ThreePartyFundingAbortTest :: Property
 prop_ThreePartyFundingAbortTest = withMaxSuccess 1 $ forAllDL (threePartyFundingAbortTest (w1, w2, w3)) propPerun
 
 -- does not work with ThreadToken, maybe timing issues?
---prop_MaliciousWalletTest :: Property
---prop_MaliciousWalletTest = mapSize (const 42) $ withMaxSuccess 1 $ forAllDL (maliciousWalletTest (w1, w2, w3)) propPerun
+-- prop_MaliciousWalletTest :: Property
+-- prop_MaliciousWalletTest = mapSize (const 42) $ withMaxSuccess 1 $ forAllDL (maliciousWalletTest (w1, w2, w3)) propPerun
 
 return [] -- <- Needed for TemplateHaskell to do some magic and find the property tests.
 

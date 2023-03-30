@@ -81,8 +81,7 @@ instance ContractModel PerunModel where
    - Only supporting two party channels for now.
   --}
   data Action PerunModel
-    = 
-      -- Start the channel (with insufficient funding)
+    = -- Start the channel (with insufficient funding)
       -- Participants ChanelID Balances Timelock Nonce
       Start [Wallet] ChannelID [Integer] Integer BuiltinByteString
     | -- Fund the channel
@@ -163,20 +162,19 @@ instance ContractModel PerunModel where
     withdraw (head parties) . Ada.lovelaceValueOf $ head startBalances
     wait 1
     CM.mint $ symAssetClassValue ct 1
-
   nextState (Fund funder idx _ _) = do
     modifyContractState
       ( \case
           Nothing -> P.error "Funding only works on existing channels"
-          Just pms@(PerunModelState chst _  _tl oldFunding isFunded isDisputed)
+          Just pms@(PerunModelState chst _ _tl oldFunding isFunded isDisputed)
             | isFunded || isDisputed -> P.error "Funding only works on unfunded & undisputed channels"
             | otherwise ->
-              let newFunding = addFunding (balances chst !! idx) idx oldFunding
-               in Just $
-                    pms
-                      { _chanFunding = newFunding,
-                        _chanFunded = newFunding == balances chst
-                      }
+                let newFunding = addFunding (balances chst !! idx) idx oldFunding
+                 in Just $
+                      pms
+                        { _chanFunding = newFunding,
+                          _chanFunded = newFunding == balances chst
+                        }
       )
     wait 3
     s <-
@@ -307,7 +305,6 @@ instance ContractModel PerunModel where
       case getLast os of
         Just ct -> registerToken "ChannelToken" (channelTokenAsset ct)
         Nothing -> P.error "Could not find channel token"
-
     Update {} -> do
       -- Update is an offchain action, so we do not perform any computation
       -- onchain wise.

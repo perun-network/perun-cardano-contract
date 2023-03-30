@@ -190,15 +190,15 @@ resolveInput cid citx inputCitxs = do
     resolveValidChannelInputs :: ChainIndexTx -> TxIn -> Either ChannelTxErr (TxOutRef, ChannelAction, ChannelDatum)
     resolveValidChannelInputs citx (TxIn ref (Just (ConsumeScriptAddress (Versioned otherValidator _) r rd)))
       | ourValidator == channelValidator cid = do
-        d <- case channelDatumFromDatum rd of
-          Right d -> return d
-          Left err -> throwError err
-        chanAction <- case fromBuiltinData . getRedeemer $ r of
-          Just tr -> return tr
-          Nothing -> throwError NoChannelInputRedeemerErr
-        iUtxo <- inputUtxo ref
-        unless (hasValidThreadToken cid (channelToken d) (citoValue iUtxo)) $ throwError WrongThreadTokenErr
-        return (ref, chanAction, d)
+          d <- case channelDatumFromDatum rd of
+            Right d -> return d
+            Left err -> throwError err
+          chanAction <- case fromBuiltinData . getRedeemer $ r of
+            Just tr -> return tr
+            Nothing -> throwError NoChannelInputRedeemerErr
+          iUtxo <- inputUtxo ref
+          unless (hasValidThreadToken cid (channelToken d) (citoValue iUtxo)) $ throwError WrongThreadTokenErr
+          return (ref, chanAction, d)
     resolveValidChannelInputs nCitx (TxIn ref Nothing) = do
       iCitx <- inputCitx ref
       mtype <- resolveTxInType cid ref iCitx nCitx

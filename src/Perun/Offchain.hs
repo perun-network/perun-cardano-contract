@@ -9,6 +9,8 @@ module Perun.Offchain where
 import Control.Monad as CM hiding (fmap)
 import Control.Monad.Error.Lens
 import Data.Aeson (FromJSON, ToJSON)
+import qualified Data.Binary as Binary
+import qualified Data.ByteString.Lazy as BSL
 import Data.List (genericSplitAt)
 import qualified Data.Map as Map
 import Data.Maybe (fromJust)
@@ -25,18 +27,16 @@ import Perun.Error
 import Perun.Onchain
 import Plutus.ChainIndex.Types hiding (ChainIndexTxOut)
 import Plutus.Contract
+import Plutus.Contract (logInfo)
 import Plutus.Contract.Oracle (SignedMessage (..))
 import Plutus.Script.Utils.Scripts as Scripts
 import qualified PlutusTx
+import qualified PlutusTx.Builtins as Builtins
 import PlutusTx.Prelude hiding (unless)
 import Schema (ToSchema)
 import Text.Hex (encodeHex)
 import Text.Printf (printf)
-import qualified PlutusTx.Builtins as Builtins
-import qualified Data.Binary as Binary
-import qualified Data.ByteString.Lazy as BSL
 import qualified Prelude as P
-import Plutus.Contract (logInfo)
 
 --
 --
@@ -74,10 +74,9 @@ data AbortParams = AbortParams
   deriving (Generic, ToJSON, FromJSON, ToSchema)
   deriving stock (P.Eq, P.Show)
 
-data AllSignedStates = AllSignedStates 
-  {
-    aChannelState :: !ChannelState,
-    aSignatures ::  ![Signature]
+data AllSignedStates = AllSignedStates
+  { aChannelState :: !ChannelState,
+    aSignatures :: ![Signature]
   }
   deriving (Generic, ToJSON, FromJSON)
   deriving stock (P.Eq, P.Show)
@@ -548,10 +547,10 @@ compressSignatures :: AllSignedStates -> SignedState
 compressSignatures (AllSignedStates state sigs) = SignedState sigs (Scripts.datumHash (Datum (PlutusTx.toBuiltinData state))) state
 
 makeAllSignedStates :: [(SignedMessage ChannelState)] -> AllSignedStates
-makeAllSignedStates sms = let datum = getDatum . osmDatum $ head sms
-                              state = fromJust $ PlutusTx.fromBuiltinData datum
-                            in AllSignedStates state (map osmSignature sms)
-
+makeAllSignedStates sms =
+  let datum = getDatum . osmDatum $ head sms
+      state = fromJust $ PlutusTx.fromBuiltinData datum
+   in AllSignedStates state (map osmSignature sms)
 
 -- | isValidChannelStart checks if transaction represented by the given list of inputs,
 -- and the given *single* channel output is a valid opening transaction for a channel with

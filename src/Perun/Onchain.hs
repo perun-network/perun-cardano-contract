@@ -517,8 +517,8 @@ mkChannelValidator cID oldDatum action ctx =
               in sum (map txOutValue outputsForParty) `geq` Ada.lovelaceValueOf v
            )
 
-    --hasThreadToken :: TxOut -> Bool
-    --hasThreadToken o = case assetClassValueOf (txOutValue o) (threadToken oldDatum) of
+    -- hasThreadToken :: TxOut -> Bool
+    -- hasThreadToken o = case assetClassValueOf (txOutValue o) (threadToken oldDatum) of
     --  0 -> False
     --  1 -> True
     --  _else -> traceError "more than one ThreadToken in an output"
@@ -590,13 +590,13 @@ mkChannelTokenPolicy (TxOutRef refHash refIdx) (vHash, action) ctx@ScriptContext
          in traceIfFalse "S8" {-"Pending transaction does not spend the designated transaction output"-} v
    in mintOK && (if action == Mint then txOutputSpent else True)
 
---data PolicyTypes
+-- data PolicyTypes
 
---instance Scripts.ValidatorTypes PolicyTypes where
+-- instance Scripts.ValidatorTypes PolicyTypes where
 --  type RedeemerType PolicyTypes = (ValidatorHash, Action)
 --
---ttMintingPolicy :: TxOutRef -> MintingPolicy
---ttMintingPolicy outRef =
+-- ttMintingPolicy :: TxOutRef -> MintingPolicy
+-- ttMintingPolicy outRef =
 -- mkMintingPolicyScript
 --    $$(PlutusTx.compile [||mkTTPolicy||])
 --    $$(PlutusTx.compile [||wrap||])

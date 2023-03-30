@@ -26,9 +26,9 @@ import Data.Aeson
     genericParseJSON,
     genericToJSON,
   )
-import Orphans ()
 import qualified Data.OpenApi as OpenApi
 import GHC.Generics (Generic)
+import Orphans ()
 import Perun.Adjudicator as Perun
 import Perun.Offchain as Perun
 import Perun.Onchain as Perun
