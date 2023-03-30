@@ -83,26 +83,21 @@ library
 
     build-depends:
                       , aeson
-                      , bytestring
-                      , cardano-api
-                      , cardano-wallet
-                      , prettyprinter
                       , containers
-                      , data-default
-                      , recursion-schemes
                       , plutus-contract
+                      , bytestring
+                      , data-default
+                      , openapi3
                       , plutus-ledger
-                      , plutus-tx-plugin
                       , plutus-ledger-api
                       , plutus-ledger-constraints
                       , plutus-script-utils
+                      , plutus-tx-plugin
                       , plutus-chain-index-core
                       , playground-common
                       , plutus-tx
                       , lens
                       , text
-                      , openapi3
-                      , plutus-pab
                       , hex-text
                       , binary
     hs-source-dirs:   src

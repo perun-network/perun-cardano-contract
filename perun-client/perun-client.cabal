@@ -78,7 +78,6 @@ library
                       , bytestring
                       , cardano-api
                       , cardano-wallet
-                      , prettyprinter
                       , containers
                       , data-default
                       , servant-client
@@ -87,16 +86,7 @@ library
                       , async
                       , plutus-contract
                       , plutus-ledger
-                      , plutus-tx-plugin
-                      , plutus-ledger-api
-                      , plutus-ledger-constraints
-                      , plutus-script-utils
-                      , plutus-chain-index-core
-                      , playground-common
-                      , plutus-tx
                       , lens
                       , text
-                      , openapi3
                       , plutus-pab
-                      , hex-text
     hs-source-dirs:   src
