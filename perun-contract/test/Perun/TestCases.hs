@@ -2,14 +2,14 @@
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module PerunPlutus.TestCases (perunTests) where
+module Perun.TestCases (perunTests) where
 
 import Control.Lens hiding (both)
 import Data.Tuple.Extra
 import Perun hiding (ChannelAction (..))
 import Perun.Offchain (mkNonceFromInteger)
-import PerunPlutus.PerunSpec
-import PerunPlutus.Test.EvilContract
+import Perun.PerunSpec
+import Perun.Test.EvilContract
 import Plutus.Contract.Test
 import Plutus.Contract.Test.ContractModel
 import PlutusTx.Builtins (BuiltinByteString (..))

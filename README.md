@@ -1,6 +1,14 @@
-# Perun Plutus
+# Perun Cardano Libraries
 
-Implementation for the Perun protocol in Plutus.
+This repository contains the implementation for the on-chain part of the Perun protocol, PAB contracts to interface with channels deployed on Cardano as well as an adjudicator contract, that acts as an event subscription to Perun channels.
+
+# Packages
+
+What follows is a short outline for each package and a reference to its README.
+
+* [`perun-contract`](./perun-contract/README.md): Contains the plutus on-chain script for Perun, together with an offchain library to interact with Perun channels in a PAB context.
+* [`perun-pab`](./perun-pab/README.md): Contains the pab executable and boilerplate code to make the Perun types PAB compatible.
+* [`perun-client`](./perun-client/README.md): Contains a Haskell example client together with a convenience library to let mulitple clients interact with each other.
 
 # Development
 
@@ -8,8 +16,8 @@ Implementation for the Perun protocol in Plutus.
 
 Hosted by cardano, it is almost a requirement to have the haddock docs open in
 the background as a reference. Especially when working with Haskell libraries:
-  * [Plutus SDK](https://playground.plutus.iohkdev.io/doc/haddock/)
   * [Hackage Libraries | Everything that does not come from the Plutus SDK](https://hackage.haskell.org/)
+  * [Plutus SDK](https://input-output-hk.github.io/plutus/master/)
 
 It can also be beneficial to access the up-to-date docs for your locally checked out SDK version via `nix`.
 For this follow the [Nix-Section](##Nix).

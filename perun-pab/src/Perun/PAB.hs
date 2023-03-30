@@ -13,7 +13,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
-module PAB
+module Perun.PAB
   ( StarterContracts (..),
   )
 where
@@ -28,10 +28,10 @@ import Data.Aeson
   )
 import qualified Data.OpenApi as OpenApi
 import GHC.Generics (Generic)
-import Orphans ()
 import Perun.Adjudicator as Perun
 import Perun.Offchain as Perun
 import Perun.Onchain as Perun
+import Perun.Orphans ()
 import Plutus.PAB.Effects.Contract.Builtin (SomeBuiltin (..))
 import qualified Plutus.PAB.Effects.Contract.Builtin as Builtin
 import Prettyprinter (Pretty (..), viaShow)

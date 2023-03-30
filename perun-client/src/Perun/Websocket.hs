@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeApplications #-}
 
-module Websocket
+module Perun.Websocket
   ( runContractSubscription,
     withContractSubscription,
   )

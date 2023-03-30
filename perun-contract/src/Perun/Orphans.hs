@@ -1,4 +1,4 @@
-module Orphans where
+module Perun.Orphans where
 
 import qualified Data.OpenApi as OpenApi
 import qualified Perun.Onchain as Perun
