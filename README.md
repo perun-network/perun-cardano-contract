@@ -1,6 +1,14 @@
-# Perun Cardano Contract
+# Perun Cardano Libraries
 
 This repository contains the implementation for the on-chain part of the Perun protocol, PAB contracts to interface with channels deployed on Cardano as well as an adjudicator contract, that acts as an event subscription to Perun channels.
+
+# Packages
+
+What follows is a short outline for each package and a reference to its README.
+
+* [`perun-contract`](./perun-contract/README.md): Contains the plutus on-chain script for Perun, together with an offchain library to interact with Perun channels in a PAB context.
+* [`perun-pab`](./perun-pab/README.md): Contains the pab executable and boilerplate code to make the Perun types PAB compatible.
+* [`perun-client`](./perun-client/README.md): Contains a Haskell example client together with a convenience library to let mulitple clients interact with each other.
 
 # Development
 
