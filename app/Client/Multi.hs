@@ -24,7 +24,10 @@ module Multi
     actors,
     MultiClientError (..),
     runMultiClientWith,
+    MultiClient,
+    async,
     delayAll,
+    withChannelToken,
     callEndpointFor,
     actionBy,
     subscribeToContractEvents,
@@ -37,18 +40,21 @@ where
 import Adjudicator
 import Client
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.Async
+import qualified Control.Concurrent.Async as CC
 import Control.Exception (Exception)
 import Control.Lens
 import Control.Logger.Simple
 import Control.Monad.Except
 import Control.Monad.State
-import Data.Aeson (ToJSON)
+import Data.Aeson (ToJSON, Value (Null))
 import qualified Data.Map.Strict as Map
 import Data.Proxy
 import Data.Text (pack)
 import GHC.TypeLits
+import Perun (OpenParams)
+import Perun.Offchain (AllSignedStates (..), makeAllSignedStates)
 import Perun.Onchain
+import Plutus.PAB.Webserver.Types
 import Servant.Client
 import Websocket
 
@@ -59,7 +65,8 @@ newtype MultiClientState = MultiClientState
 makeFields ''MultiClientState
 
 data MultiClientError
-  = MultiClientImpossibleLookupErr
+  = MultiClientNoObservableStateError
+  | MultiClientImpossibleLookupErr
   | MultiClientEndpointErr !ClientError
   deriving (Show)
 
@@ -83,6 +90,28 @@ runMultiClientWith creds action = do
     res <- flip evalStateT (MultiClientState actorStates) . runExceptT . unMultiClient $ action
     logInfo "MultiClient trace done."
     return res
+
+withChannelToken :: forall actor actors a. (HasActor actor actors) => OpenParams -> (ChannelToken -> MultiClient actors a) -> MultiClient actors a
+withChannelToken openParams action = do
+  actorStates <- gets _multiClientStateActors
+  let call = callEndpointFor @actor @actors "start" openParams
+  (cid, baseUrl) <- actionBy @actor $ do
+    cid <- gets (^. instClientId)
+    ClientEnv {baseUrl} <- gets (^. pabClientEnv)
+    return (cid, baseUrl)
+  let predf (Just (NewObservableState Null)) = False
+      predf (Just (NewObservableState _s)) = True
+      predf _ = False
+  void . liftIO . withContractSubscription baseUrl cid predf $ do
+    res <- flip evalStateT (MultiClientState actorStates) . runExceptT . unMultiClient $ call
+    case res of
+      Left err -> print err
+      Right _ -> return ()
+  ct <-
+    actionBy @actor getObservableState >>= \case
+      Nothing -> throwError MultiClientNoObservableStateError
+      Just ct -> return ct
+  action ct
 
 delayAll :: Int -> MultiClient actors ()
 delayAll ms = do
@@ -111,19 +140,26 @@ actionBy action = do
   modify $ actors %~ Map.insert actorKey newState
   return res
 
+async :: forall actors a. (SymbolList actors) => MultiClient actors a -> MultiClient actors ()
+async action = do
+  s <- gets (^. actors)
+  void . liftIO . CC.async . runMultiClientWith @actors (map snd . Map.toList $ s) $ action
+
 subscribeToContractEvents :: forall actor actors. (HasActor actor actors) => MultiClient actors ()
 subscribeToContractEvents = actionBy @actor $ do
   apiUrl <- gets (baseUrl . (^. pabClientEnv))
   cid <- gets (^. instClientId)
-  void . liftIO . async $ runContractSubscription apiUrl cid
+  void . liftIO $ runContractSubscription apiUrl cid
 
 subscribeAdjudicator :: forall actor actors. (HasActor actor actors) => ChannelID -> MultiClient actors ()
 subscribeAdjudicator cID = actionBy @actor $ do
   clientState <- get
-  void . liftIO . async $ runAdjudicatorForClient clientState cID
+  void . liftIO $ runAdjudicatorForClient clientState cID
 
-update :: forall actors. (SymbolList actors) => ChannelState -> MultiClient actors SignedState
-update newState = SignedState <$> (mapAllClients @actors $ signState newState)
+update :: forall actors. (SymbolList actors) => ChannelState -> MultiClient actors AllSignedStates
+update newState = do
+  signedMessages <- (mapAllClients @actors $ signState newState)
+  return $ makeAllSignedStates signedMessages
 
 mapAllClients :: forall actors a. (SymbolList actors) => PerunClient a -> MultiClient actors [a]
 mapAllClients action = do

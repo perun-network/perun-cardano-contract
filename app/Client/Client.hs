@@ -14,7 +14,6 @@
 module Client where
 
 import Cardano.Api hiding (Value)
-import Cardano.Api.Shelley hiding (Value)
 import Cardano.Wallet.Api.Client
 import qualified Cardano.Wallet.Api.Types as AT (ApiAddress (id), ApiT (..))
 import qualified Cardano.Wallet.Primitive.Types as Types
@@ -25,17 +24,19 @@ import Control.Exception
 import Control.Lens
 import Control.Monad.Except
 import Control.Monad.State
-import Data.Aeson (Result (..), fromJSON, toJSON)
+import Data.Aeson (Result (..), encode, fromJSON, toJSON)
 import qualified Data.ByteString as BS
+import Data.Monoid (Last (..))
 import Data.Proxy
 import Data.Text (Text, pack)
 import Data.Text.Encoding (encodeUtf8)
-import Ledger.Address (PaymentPrivateKey (..), PaymentPubKey (..))
+import Ledger.Address (PaymentPrivateKey (..), PaymentPubKey (..), PaymentPubKeyHash (..), xprvToPaymentPubKeyHash)
 import Ledger.Crypto (Passphrase, PubKeyHash, generateFromSeed, toPublicKey)
 import Network.HTTP.Client hiding (Proxy)
 import PAB
 import Perun.Onchain
 import Plutus.Contract.Oracle
+import Plutus.PAB.Events.ContractInstanceState (PartiallyDecodedResponse (..))
 import Plutus.PAB.Webserver.Client
 import Plutus.PAB.Webserver.Types
 import Servant.Client
@@ -111,9 +112,6 @@ withWallet (SomeNetworkDiscriminant (Proxy :: Proxy n)) walletURL pabURL wlt (mn
   addr <- case maddr of
     Nothing -> throwError PerunClientInitAddressDeserializationErr
     Just addr -> return addr
-  pkh <- case shelleyPayAddrToPlutusPubKHash addr of
-    Nothing -> throwError PerunClientInitAddrToPubKHashErr
-    Just pkh -> return pkh
 
   let PabClient
         { activateContract,
@@ -131,6 +129,7 @@ withWallet (SomeNetworkDiscriminant (Proxy :: Proxy n)) walletURL pabURL wlt (mn
 
   let pk = privateKeyFromMnemonic (mnemonic, pp)
       ppk = signingPubKeyFromMnemonic (mnemonic, pp)
+      pkh = unPaymentPubKeyHash . xprvToPaymentPubKeyHash . unPaymentPrivateKey $ pk
 
   return
     PerunClientState
@@ -194,3 +193,20 @@ walletIdFromWallet (Wallet _ (WalletId wid)) = wid
 
 addressFromApi :: AT.ApiAddress n -> Types.Address
 addressFromApi = AT.getApiT . fst . AT.id
+
+getObservableState :: PerunClient (Maybe ChannelToken)
+getObservableState = do
+  InstanceClient {getInstanceStatus} <- gets (^. instClient)
+  env <- gets (^. pabClientEnv)
+  contractState <-
+    runClient getInstanceStatus env >>= \case
+      Left err -> error $ show err -- FIXME: Add PeruncClientError
+      Right r -> return r
+  let currentState = cicCurrentState contractState
+  lst <- case fromJSON @(Last ChannelToken) $ observableState currentState of
+    Error err -> do
+      liftIO . print . encode . observableState $ currentState
+      error . unwords $ ["could not decode channeltoken", err]
+    Success lst -> do
+      return lst
+  return $ getLast lst

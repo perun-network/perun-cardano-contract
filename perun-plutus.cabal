@@ -36,6 +36,7 @@ common shared
                     -fno-ignore-interface-pragmas
                     -fno-omit-interface-pragmas
                     -fobject-code
+                    -Wno-orphans
 
 executable perun-client
   import:           shared
@@ -54,6 +55,8 @@ executable perun-client
                     , prettyprinter
                     , bytestring
                     , plutus-ledger
+                    , plutus-tx
+                    , base16-bytestring
                     , containers
                     , lens
                     , mtl
@@ -150,6 +153,7 @@ library
                       , openapi3
                       , plutus-pab
                       , hex-text
+                      , binary
     hs-source-dirs:   src
 
 test-suite perun-plutus-test
