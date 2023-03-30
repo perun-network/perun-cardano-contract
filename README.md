@@ -1,6 +1,6 @@
-# Perun Plutus
+# Perun Cardano Contract
 
-Implementation for the Perun protocol in Plutus.
+This repository contains the implementation for the on-chain part of the Perun protocol, PAB contracts to interface with channels deployed on Cardano as well as an adjudicator contract, that acts as an event subscription to Perun channels.
 
 # Development
 
