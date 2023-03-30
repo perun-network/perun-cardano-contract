@@ -12,7 +12,6 @@ import Cardano.Wallet.Primitive.AddressDerivation (NetworkDiscriminant (..))
 import qualified Cardano.Wallet.Primitive.Types as Types
 import Cardano.Wallet.Shelley.Compatibility ()
 import Cardano.Wallet.Shelley.Network.Discriminant
-import Perun.Client
 import Control.Lens
 import Control.Monad.State
 import qualified Data.ByteString.Base16 as BS16
@@ -27,8 +26,9 @@ import Ledger (PaymentPubKeyHash (..))
 import qualified Ledger.Crypto as Crypto
 import Options.Applicative hiding (Success)
 import Options.Applicative.Types
+import Perun.Client
 import Perun.Offchain (DisputeParams (..), ForceCloseParams (..), FundParams (..), OpenParams (..), getChannelId, mkNonceFromInteger)
-import Perun.Onchain (channelTokenAsset, ChannelID(..), Channel (..), ChannelState (..))
+import Perun.Onchain (Channel (..), ChannelID (..), ChannelState (..), channelTokenAsset)
 import Plutus.PAB.Types (Config (..), WebserverConfig (..), defaultWebServerConfig)
 import qualified PlutusTx.Builtins as Builtins
 import Servant.Client.Core.BaseUrl (BaseUrl (..), Scheme (..))

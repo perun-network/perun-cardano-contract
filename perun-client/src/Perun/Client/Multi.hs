@@ -49,10 +49,10 @@ import qualified Data.Map.Strict as Map
 import Data.Proxy
 import Data.Text (pack)
 import GHC.TypeLits
-import Perun.Client.Client
 import Perun.Client.Adjudicator
-import Perun.Onchain
+import Perun.Client.Client
 import Perun.Offchain
+import Perun.Onchain
 import Perun.Websocket
 import Plutus.PAB.Webserver.Types
 import Servant.Client

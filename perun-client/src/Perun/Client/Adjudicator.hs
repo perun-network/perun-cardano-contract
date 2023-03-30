@@ -8,18 +8,18 @@
 
 module Perun.Client.Adjudicator where
 
-import Perun.Client.Client
 import Control.Lens
 import Control.Monad.Except
 import Control.Monad.State
 import Data.Text (Text, pack)
-import Perun.PAB
+import Perun.Client.Client
 import Perun.Onchain
+import Perun.PAB
+import Perun.Websocket
 import Plutus.PAB.Webserver.Client
 import Plutus.PAB.Webserver.Types
 import Servant.Client
 import Wallet.Types (ContractInstanceId)
-import Perun.Websocket
 
 data AdjudicatorState = AdjudicatorState
   { _adjudicatorStateInstClientId :: !ContractInstanceId,

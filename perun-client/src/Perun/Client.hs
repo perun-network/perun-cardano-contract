@@ -5,6 +5,6 @@ module Perun.Client
   )
 where
 
+import Perun.Client.Adjudicator as Ad
 import Perun.Client.Client as Cl
 import Perun.Client.Multi as Mu
-import Perun.Client.Adjudicator as Ad
