@@ -52,7 +52,7 @@ data PerunError
   | -- | Thrown when the channel id given to an endpoint does not align
     -- with the channel id in a signed state or the computed channel id
     -- from the channel parameters.
-    ChannelIdMismatchError
+    ChannelIDMismatchError
   | FindChannelError !FindChannelException
   | SubscriptionError !SubscriptionException
   | SomeContractError !ContractError
@@ -69,8 +69,6 @@ data FindChannelException
     NoUTXOsError
   | -- | Thrown when an unexpected number of UTXOs are found for a given
     -- channel id.
-    -- TODO: This most likely has to be removed, since we cannot prevent
-    -- anyone from just sending UTXOs to our channel.
     UnexpectedNumberOfUTXOsError
   | -- | Thrown when no UTXO is found, which contains the ChannelToken
     -- as value

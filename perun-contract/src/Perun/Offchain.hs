@@ -164,7 +164,7 @@ start OpenParams {..} = do
       v = Ada.lovelaceValueOf (head spBalances) <> tokenVal
       lookups = Constraints.typedValidatorLookups (typedChannelValidator spChannelId) P.<> Constraints.plutusV2OtherScript (channelValidator spChannelId) P.<> Constraints.mintingPolicy (mkVersionedChannelTokenMintinPolicy ref) P.<> Constraints.unspentOutputs utxos
       tx = Constraints.mustPayToTheScript d v <> Constraints.mustMintValueWithRedeemer (Redeemer (PlutusTx.toBuiltinData (hash, Perun.Onchain.Mint))) tokenVal <> Constraints.mustSpendPubKeyOutput ref
-  unless (spChannelId == getChannelId c) . throwing_ $ _ChannelIdMismatchError
+  unless (spChannelId == getChannelId c) . throwing_ $ _ChannelIDMismatchError
   ledgerTx <- submitTxConstraintsWith lookups tx
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   tellToken token
@@ -278,7 +278,7 @@ open OpenParams {..} = do
       v = Ada.lovelaceValueOf (sum spBalances) <> tokenVal
       lookups = (Constraints.typedValidatorLookups (typedChannelValidator spChannelId)) P.<> Constraints.plutusV2OtherScript (channelValidator spChannelId) P.<> (Constraints.mintingPolicy (mkVersionedChannelTokenMintinPolicy ref)) P.<> Constraints.unspentOutputs utxos
       tx = (Constraints.mustPayToTheScript d v) <> (Constraints.mustMintValueWithRedeemer (Redeemer (PlutusTx.toBuiltinData (hash, Perun.Onchain.Mint))) tokenVal) <> Constraints.mustSpendPubKeyOutput ref
-  unless (spChannelId == getChannelId c) . throwing_ $ _ChannelIdMismatchError
+  unless (spChannelId == getChannelId c) . throwing_ $ _ChannelIDMismatchError
   ledgerTx <- submitTxConstraintsWith lookups tx
   void . awaitTxConfirmed $ getCardanoTxId ledgerTx
   tellToken token
@@ -293,7 +293,7 @@ dispute ::
 dispute (DisputeParams dpChannelId ct keys ast) = do
   let signedState = compressSignatures ast
       dState = extractVerifiedState signedState keys
-  unless ((channelId dState) == dpChannelId) . throwing_ $ _ChannelIdMismatchError
+  unless ((channelId dState) == dpChannelId) . throwing_ $ _ChannelIDMismatchError
   now <- currentTime
   (oref, o, d@ChannelDatum {..}) <- findChannelWithSync' dpChannelId ct
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
@@ -369,7 +369,7 @@ close ::
 close (CloseParams cId ct keys ast) = do
   let signedState = compressSignatures ast
       s@ChannelState {..} = extractVerifiedState signedState keys
-  unless (channelId == cId) . throwing_ $ _ChannelIdMismatchError
+  unless (channelId == cId) . throwing_ $ _ChannelIDMismatchError
   unless final . throwing_ $ _CloseOnNonFinalChannelError
   (oref, o, ChannelDatum {..}) <- findChannelWithSync' channelId ct
   unless (all isLegalOutValue balances) . throwing_ $ _InsufficientMinimumAdaBalanceError
