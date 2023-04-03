@@ -149,9 +149,7 @@ waitForUpdate cID = do
           let addr = channelAddress cID
               -- waitForStart waits for the channel to be created.
               waitForStart = promiseBind (utxoIsProduced addr) $ \ciTx -> do
-                logInfo @String $ unwords ["No onchain state found for channel:", show cID]
-                logInfo @String "Waiting for channel creation..."
-                logInfo @String $ unwords ["UTXO produced at:", show addr]
+                logInfo @String $ unwords ["Initial on-chain state UTxO produced at:", show addr]
                 outRefMaps <-
                   Control.Lens.traverse utxosTxOutTxFromTx ciTx >>= \case
                     -- ChainIndex was not synced properly to retrieve UTXOs for
@@ -169,9 +167,8 @@ waitForUpdate cID = do
           waitForStart
         Right currentOcs@(OnChainState ocsTxOutRef) -> do
           promiseBind (utxoIsSpent (Typed.tyTxOutRefRef ocsTxOutRef)) $ \txn -> do
-            logInfo @String $ unwords ["Found onchain state for channel:", show cID]
-            logInfo @String "waiting for channel update..."
-            logInfo @String $ unwords ["UTXO spent in transaction:", show $ _citxTxId txn]
+            logInfo @String $ unwords ["Found new onchain state for channel:", show cID]
+            logInfo @String $ unwords ["Channel update executed in transaction:", show $ _citxTxId txn]
             outRefMap <-
               map projectFst
                 <$> ( utxosTxOutTxFromTx txn >>= \case
