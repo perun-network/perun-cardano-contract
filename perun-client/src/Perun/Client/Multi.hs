@@ -159,9 +159,7 @@ subscribeAdjudicator cID = actionBy @actor $ do
   void . liftIO $ runAdjudicatorForClient clientState cID
 
 update :: forall actors. (SymbolList actors) => ChannelState -> MultiClient actors AllSignedStates
-update newState = do
-  signedMessages <- (mapAllClients @actors $ signState newState)
-  return $ makeAllSignedStates signedMessages
+update newState = makeAllSignedStates <$> (mapAllClients @actors $ signState newState)
 
 mapAllClients :: forall actors a. (SymbolList actors) => PerunClient a -> MultiClient actors [a]
 mapAllClients action = do
