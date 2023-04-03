@@ -33,7 +33,7 @@ import qualified PlutusTx
 type AdjudicatorSchema = Endpoint "watch" ()
 
 -- | adjudicatorSubscription listens for state changes to the onchain state of
--- the channel. The change can be viewed by subscribers of the PAB instance.
+-- the channel. The change can be viewed by subscribers to the PAB instance.
 adjudicatorSubscription ::
   ChannelID ->
   Contract PerunEvent AdjudicatorSchema PerunError ()
@@ -42,8 +42,9 @@ adjudicatorSubscription cID = do
         logInfo @String $ unwords ["stopped listening for channel:", show cID]
         pure $ Right ()
       continue = pure . Left
-      -- onEvents is the callback invoked when the state changes and new events
-      -- were fired.
+      -- onEvents is the callback invoked when on-chain state changes for the
+      -- given channel id occur. Updates to the on-chain state emit new events
+      -- which are then logged and told to subscribers.
       onEvents evs@[Concluded _ _] = do
         tellAndLog cID evs
         -- We stop listening for state changes after the channel has been
@@ -77,7 +78,7 @@ adjudicatorSubscription cID = do
       listenToConcludedOrNewChannel cID >>= loop
     Left err -> logError @String $ unwords ["adjudicator error:", show err]
 
--- | tellAndLog is a helper to log the events and tell them to subscribers of
+-- | tellAndLog is a helper to log the events and tell them to subscribers to
 -- the adjudicator contract.
 tellAndLog ::
   (AsPerunError e, AsContractError e) =>
