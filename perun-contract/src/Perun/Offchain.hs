@@ -26,7 +26,6 @@ import Ledger.Value (AssetClass (..), valueOf)
 import Perun.Error
 import Perun.Onchain
 import Plutus.ChainIndex.Types hiding (ChainIndexTxOut)
-import Plutus.Contract
 import Plutus.Contract (logInfo)
 import Plutus.Contract.Oracle (SignedMessage (..))
 import Plutus.Script.Utils.Scripts as Scripts
@@ -175,7 +174,7 @@ fund ::
   FundParams ->
   Contract w s e ()
 fund FundParams {..} = do
-  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync' fpChannelId fpChannelToken
+  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync fpChannelId fpChannelToken
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   -- TODO add more checks before funding
   unless (all isLegalOutValue (balances state)) . throwing_ $ _InsufficientMinimumAdaBalanceError
@@ -208,7 +207,7 @@ abort ::
   AbortParams ->
   Contract w s e ()
 abort (AbortParams cId ct) = do
-  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync' cId ct
+  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync cId ct
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   -- TODO: This still gives the potential to lock a channel?
   unless (all isLegalOutValue funding) . throwing_ $ _InsufficientMinimumAdaBalanceError
@@ -295,7 +294,7 @@ dispute (DisputeParams dpChannelId ct keys ast) = do
       dState = extractVerifiedState signedState keys
   unless ((channelId dState) == dpChannelId) . throwing_ $ _ChannelIDMismatchError
   now <- currentTime
-  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync' dpChannelId ct
+  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync dpChannelId ct
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   unless (all isLegalOutValue (balances dState)) . throwing_ $ _InsufficientMinimumAdaBalanceError
   unless (isValidStateTransition state dState) . throwing_ $ _InvalidStateTransitionError
@@ -371,7 +370,7 @@ close (CloseParams cId ct keys ast) = do
       s@ChannelState {..} = extractVerifiedState signedState keys
   unless (channelId == cId) . throwing_ $ _ChannelIDMismatchError
   unless final . throwing_ $ _CloseOnNonFinalChannelError
-  (oref, o, ChannelDatum {..}) <- findChannelWithSync' channelId ct
+  (oref, o, ChannelDatum {..}) <- findChannelWithSync channelId ct
   unless (all isLegalOutValue balances) . throwing_ $ _InsufficientMinimumAdaBalanceError
   unless (isValidStateTransition state s) . throwing_ $ _InvalidStateTransitionError
   unless funded . throwing_ $ _CloseOnNonFundedChannelError
@@ -400,7 +399,7 @@ forceClose ::
   ForceCloseParams ->
   Contract w s e ()
 forceClose (ForceCloseParams cId ct) = do
-  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync' cId ct
+  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync cId ct
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   unless (all isLegalOutValue (balances state)) . throwing_ $ _InsufficientMinimumAdaBalanceError
   unless disputed . throwing_ $ _ForceCloseOnNonDisputedChannelError
@@ -431,65 +430,35 @@ earliestFirstCloseTime :: POSIXTime -> Integer -> POSIXTime
 earliestFirstCloseTime timeStamp timeLock = timeStamp + POSIXTime timeLock
 
 -- | findChannelWithSync is an optimistic findChannel handler. It first tries
--- to find a channel and if not successful, retries it again AFTER making sure
--- to synchronize with the chainindex to its current slot.
-findChannelWithSync ::
-  (AsPerunError e, AsContractError e) =>
-  ChannelID ->
-  Contract w s e (TxOutRef, ChainIndexTxOut, ChannelDatum)
-findChannelWithSync cid =
-  handleError errorHandler $ findChannel cid
-  where
-    errorHandler (FindChannelError _) = do
-      logWarn @Text "Optimistic findChannel not succeeded. Trying again after syncing PAB with Chainindex."
-      retryAfterSync $ findChannel cid
-    errorHandler err = throwing _PerunError err
-
--- | findChannelWithSync' is an optimistic findChannel handler. It first tries
 -- to find a valid channel for the given channel id and thread token and if not successful,
 -- retries it again AFTER making sure to synchronize with the chainindex to its current slot.
-findChannelWithSync' ::
+findChannelWithSync ::
   (AsPerunError e, AsContractError e) =>
   ChannelID ->
   AssetClass ->
   Contract w s e (TxOutRef, ChainIndexTxOut, ChannelDatum)
-findChannelWithSync' cid ct =
-  handleError errorHandler $ findChannel cid
+findChannelWithSync cid ct =
+  handleError errorHandler $ findChannel cid ct
   where
     errorHandler (FindChannelError _) = do
       logWarn @Text "Optimistic findChannel not succeeded. Trying again after syncing PAB with Chainindex."
-      retryAfterSync $ findChannel' cid ct
+      retryAfterSync $ findChannel cid ct
     errorHandler err = throwing _PerunError err
 
 getChannelId :: Channel -> ChannelID
 getChannelId channel = ChannelID . S.dataHash $ PlutusTx.toBuiltinData channel
 
-findChannel ::
-  (AsPerunError e, AsContractError e) =>
-  ChannelID ->
-  Contract w s e (TxOutRef, ChainIndexTxOut, ChannelDatum)
-findChannel cID = do
-  utxos <- utxosAt $ channelAddress cID
-  case Map.toList utxos of
-    [(oref, o)] -> case _ciTxOutScriptDatum o of
-      (_, Just (Datum e)) -> case PlutusTx.fromBuiltinData e of
-        Nothing -> throwing _FindChannelError WrongDatumTypeError
-        Just d@ChannelDatum {} -> return (oref, o, d)
-      _otherwise -> throwing _FindChannelError DatumMissingError
-    [] -> throwing _FindChannelError NoUTXOsError
-    _utxos -> throwing _FindChannelError UnexpectedNumberOfUTXOsError
-
--- | findChannel' searches the utxos at the channel address (parameterized by the channel id)
+-- | findChannel searches the utxos at the channel address (parameterized by the channel id)
 -- for an utxo that has:
 -- 1. the given ThreadToken named in the utxo's datum and attached to the utxo's value.
 -- 2. the ThreadToken's TokenName is equal to the ValidatorHash of the channel validator for the given channel id.
 -- 3. the channelParameters in the utxo's evaluating to the given channel id.
-findChannel' ::
+findChannel ::
   (AsPerunError e, AsContractError e) =>
   ChannelID ->
   AssetClass ->
   Contract w s e (TxOutRef, ChainIndexTxOut, ChannelDatum)
-findChannel' cID ct = do
+findChannel cID ct = do
   utxos <- utxosAt $ channelAddress cID
   let utxoList = Map.toList utxos
   filterChannelUtxos utxoList

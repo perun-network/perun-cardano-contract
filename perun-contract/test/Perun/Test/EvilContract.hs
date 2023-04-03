@@ -13,6 +13,7 @@
 module Perun.Test.EvilContract where
 
 import Control.Monad hiding (fmap)
+import Control.Monad.Error.Lens (throwing)
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Data
 import Data.Map as Map hiding (map)
@@ -21,7 +22,7 @@ import GHC.Generics (Generic)
 import Ledger
 import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
-import Perun hiding (abort, close, dispute, forceClose, fund, open, start)
+import Perun hiding (abort, close, dispute, forceClose, fund, open, start, findChannel)
 import Perun.Error
 import Plutus.Contract
 import qualified Plutus.V1.Ledger.Scripts as Scripts
@@ -109,6 +110,20 @@ fund EvilFund {..} = do
     FundViolateChannelIntegrity -> fundViolateChannelIntegrity efChannelId
     FundInvalidFunded -> fundInvalidFunded efChannelId
     FundAlreadyFunded -> fundAlreadyFunded efChannelId
+
+findChannel ::
+  ChannelID ->
+  Contract w s PerunError (TxOutRef, ChainIndexTxOut, ChannelDatum)
+findChannel cID = do
+  utxos <- utxosAt $ channelAddress cID
+  case Map.toList utxos of
+    [(oref, o)] -> case _ciTxOutScriptDatum o of
+      (_, Just (Datum e)) -> case PlutusTx.fromBuiltinData e of
+        Nothing -> throwing _FindChannelError WrongDatumTypeError
+        Just d@ChannelDatum {} -> return (oref, o, d)
+      _otherwise -> throwing _FindChannelError DatumMissingError
+    [] -> throwing _FindChannelError NoUTXOsError
+    _utxos -> throwing _FindChannelError UnexpectedNumberOfUTXOsError
 
 fundViolateChannelIntegrity :: ChannelID -> Contract EvilContractState s PerunError ()
 fundViolateChannelIntegrity cid = do
