@@ -5,13 +5,13 @@
 module Perun.Websocket
   ( runContractSubscription,
     withContractSubscription,
+    ContractActionException (..),
   )
 where
 
-import Control.Concurrent (forkIO)
+import Control.Concurrent.Async
 import Control.Exception
 import Control.Logger.Simple
-import Control.Monad (void)
 import Data.Aeson
 import Data.ByteString.Lazy (toStrict)
 import Data.Text
@@ -59,20 +59,28 @@ contractSub conn =
       logInfo . decodeUtf8 . toStrict . encode $ msg
       go
 
+data ContractActionException
+  = ContractActionException !String
+  | ContractWaitException !ConnectionException
+  deriving (Show)
+
 withContractSubscription ::
   BaseUrl ->
   ContractInstanceId ->
   (Maybe InstanceStatusToClient -> Bool) ->
-  IO () ->
-  IO ()
+  IO (Either ContractActionException ()) ->
+  IO (Either ContractActionException ())
 withContractSubscription baseurl cid predf action = do
-  void . forkIO $ action
-  waitForContractUpdate baseurl cid predf
+  callPromise <- async action
+  updateRes <-
+    (Right <$> waitForContractUpdate baseurl cid predf)
+      `catch` (return . Left . ContractWaitException)
+  callRes <- wait callPromise
+  return $ callRes >> updateRes
 
 waitForContractUpdate :: BaseUrl -> ContractInstanceId -> (Maybe InstanceStatusToClient -> Bool) -> IO ()
-waitForContractUpdate (BaseUrl _ host port _) cid predf = do
+waitForContractUpdate (BaseUrl _ host port _) cid predf =
   runClient host port ("ws/" <> (show . unContractInstanceId $ cid)) (predShotSub predf)
-    `catch` (logError . pack . show @ConnectionException)
 
 predShotSub :: (Maybe InstanceStatusToClient -> Bool) -> Connection -> IO ()
 predShotSub predf conn = do

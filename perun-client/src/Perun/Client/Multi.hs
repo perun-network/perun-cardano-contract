@@ -107,8 +107,8 @@ startChannelWith openParams action = do
   void . liftIO . withContractSubscription baseUrl cid predf $ do
     res <- flip evalStateT (MultiClientState actorStates) . runExceptT . unMultiClient $ call
     case res of
-      Left err -> print err
-      Right _ -> return ()
+      Left err -> return . Left . ContractActionException . show $ err
+      Right _ -> return . Right $ ()
   ct <-
     actionBy @actor getObservableState >>= \case
       Nothing -> throwError MultiClientNoObservableStateError
