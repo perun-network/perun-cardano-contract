@@ -27,7 +27,7 @@ module Perun.Client.Multi
     MultiClient,
     async,
     delayAll,
-    withChannelToken,
+    startChannelWith,
     callEndpointFor,
     actionBy,
     subscribeToContractEvents,
@@ -90,8 +90,11 @@ runMultiClientWith creds action = do
     logInfo "MultiClient trace done."
     return res
 
-withChannelToken :: forall actor actors a. (HasActor actor actors) => OpenParams -> (ChannelToken -> MultiClient actors a) -> MultiClient actors a
-withChannelToken openParams action = do
+-- | startChannelWith starts a channel with the given open parameters using the
+-- actor supplied via type application. The passed action can be a trace which
+-- has access to the ChannelToken of the newly created channel.
+startChannelWith :: forall actor actors a. (HasActor actor actors) => OpenParams -> (ChannelToken -> MultiClient actors a) -> MultiClient actors a
+startChannelWith openParams action = do
   actorStates <- gets _multiClientStateActors
   let call = callEndpointFor @actor @actors "start" openParams
   (cid, baseUrl) <- actionBy @actor $ do

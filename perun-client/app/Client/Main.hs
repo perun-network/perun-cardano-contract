@@ -176,7 +176,7 @@ fullTestTrace = do
   async $ subscribeAdjudicator @"alice" chanId
   async $ subscribeAdjudicator @"bob" chanId
   -- Trace definition.
-  withChannelToken @"alice" startParams $ \ct -> do
+  startChannelWith @"alice" startParams $ \ct -> do
     let ctAsset = channelTokenAsset ct
         fundParams = FundParams chanId ctAsset 1
         stateV1 = ChannelState chanId [defaultBalance `div` 2, (defaultBalance `div` 2) * 3] 1 False
