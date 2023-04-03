@@ -26,7 +26,7 @@ import Ledger.Value (AssetClass (..), valueOf)
 import Perun.Error
 import Perun.Onchain
 import Plutus.ChainIndex.Types hiding (ChainIndexTxOut)
-import Plutus.Contract (logInfo)
+import Plutus.Contract
 import Plutus.Contract.Oracle (SignedMessage (..))
 import Plutus.Script.Utils.Scripts as Scripts
 import qualified PlutusTx
