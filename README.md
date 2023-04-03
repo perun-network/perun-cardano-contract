@@ -20,7 +20,7 @@ the background as a reference. Especially when working with Haskell libraries:
   * [Plutus SDK](https://input-output-hk.github.io/plutus/master/)
 
 It can also be beneficial to access the up-to-date docs for your locally checked out SDK version via `nix`.
-For this follow the [Nix-Section](##Nix).
+For this follow the [Nix-Section](#Nix).
 Afterwards issue the command in the `plutus-apps` root directory: `$ nix-shell --run build-and-serve-docs`.
 
 ## Setup
