@@ -304,7 +304,8 @@ prop_TwoPartyFundingAndPaymentTest = withMaxSuccess 1 $ forAllDL (twoPartyFundin
 prop_TwoPartyFundingAbortTest :: Property
 prop_TwoPartyFundingAbortTest = withMaxSuccess 1 $ forAllDL (twoPartyFundingAbortTest (w1, w2)) propPerun
 
--- Does not work because of resource limits (size)
+-- Does not work because of resource limits (size). This is not problematic
+-- because we only support 2-party channels anyways.
 -- prop_ThreePartyFundingAndPaymentTest :: Property
 -- prop_ThreePartyFundingAndPaymentTest = withMaxSuccess 1 $ forAllDL (threePartyFundingAndPaymentTest (w1, w2, w3)) propPerun
 

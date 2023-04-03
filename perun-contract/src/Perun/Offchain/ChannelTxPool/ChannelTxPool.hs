@@ -55,7 +55,7 @@ allTxosAt addr = go (Just def)
         TxosResponse (Page _ np' txoRefs) -> do
           (txoRefs ++) <$> go np'
 
--- | mkTxPools creates possibly multiple transaction pools distinguish by a
+-- | mkTxPools creates possibly multiple transaction pools distinguished by a
 -- ChannelToken for the given channel id using a list of TxOutRefs. This
 -- version works in the Contract monad since it is required to interface with
 -- the ChainIndex to obtain metadata.
@@ -139,7 +139,7 @@ mkChannelTx cid citx = do
         throwing _SubscriptionError MismatchedChannelTokenErr
       return iToken
     -- mkChannelTx' returns ChannelTxErr if neither an input, nor an output for
-    -- a channel was found. This happens if the tx in question was randomly
+    -- a channel was found. This happens if the tx in question was maliciously
     -- sent to the channel address.
     mkChannelTx' ::
       (AsPerunError e, AsContractError e) =>

@@ -590,19 +590,6 @@ mkChannelTokenPolicy (TxOutRef refHash refIdx) (vHash, action) ctx@ScriptContext
          in traceIfFalse "S8" {-"Pending transaction does not spend the designated transaction output"-} v
    in mintOK && (if action == Mint then txOutputSpent else True)
 
--- data PolicyTypes
-
--- instance Scripts.ValidatorTypes PolicyTypes where
---  type RedeemerType PolicyTypes = (ValidatorHash, Action)
---
--- ttMintingPolicy :: TxOutRef -> MintingPolicy
--- ttMintingPolicy outRef =
--- mkMintingPolicyScript
---    $$(PlutusTx.compile [||mkTTPolicy||])
---    $$(PlutusTx.compile [||wrap||])
---  where
---    wrap = Scripts.mkUntypedMintingPolicy @(ValidatorHash, Action)
-
 mkChannelTokenMintingPolicy :: TxOutRef -> MintingPolicy
 mkChannelTokenMintingPolicy oref =
   mkMintingPolicyScript $

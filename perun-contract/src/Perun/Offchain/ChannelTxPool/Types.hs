@@ -7,9 +7,8 @@ import Ledger (TxOutRef)
 import Perun.Onchain
 import Plutus.ChainIndex hiding (txFromTxId)
 
--- | ChannelTxPool is a pool of ChannelTxs for a specific channel id.
--- Following invariants hold:
---  1. All TXs contained are ONLY relevant for a single channel id.
+-- | ChannelTxPool is a pool of ChannelTxs for a specific channel id identified
+-- by a corresponding ChannelToken.
 data ChannelTxPool = ChannelTxPool_ ChannelToken [ChannelTx]
 
 -- | ChannelTx is a ChannelTx without any constraints on the input and output.
@@ -53,7 +52,7 @@ data ChannelTxDynamic i o = ChannelTx_
   }
   deriving (Show)
 
--- Pattern synonyms to allow hiding the internal representation of ChannelTx
+-- Pattern synonyms allow hiding the internal representation of ChannelTx
 -- and ChannelTxPool. This ensures that we can use smart constructors to
 -- enforce our invariants on our types, expose the Types without
 -- type constructors (ChannelTxPool_, ChannelTx_) and STILL allow users to
