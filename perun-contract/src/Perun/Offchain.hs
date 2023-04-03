@@ -521,21 +521,5 @@ makeAllSignedStates sms =
       state = fromJust $ PlutusTx.fromBuiltinData datum
    in AllSignedStates state (map osmSignature sms)
 
--- | isValidChannelStart checks if transaction represented by the given list of inputs,
--- and the given *single* channel output is a valid opening transaction for a channel with
--- the given channel id.
-isValidChannelStart :: [TxOutRef] -> (Address, Value, ChannelDatum) -> ChannelID -> Bool
-isValidChannelStart inputs (outAddress, outValue, ChannelDatum {..}) cId =
-  let ref = ctTxOutRef channelToken
-      s = channelTokenSymbol ref
-      tn = channelTokenName (channelHash cId)
-   in ref `elem` inputs
-        && getChannelId channelParameters == cId
-        && outAddress == channelAddress cId
-        && valueOf outValue s tn == 1
-        && channelToken == ChannelToken s tn ref
-        && not disputed
-        && False -- TODO: Complete these checks!
-
 mkNonceFromInteger :: Integer -> BuiltinByteString
 mkNonceFromInteger = Builtins.toBuiltin . BSL.toStrict . Binary.encode
