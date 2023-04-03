@@ -22,7 +22,7 @@ import GHC.Generics (Generic)
 import Ledger
 import Ledger.Ada as Ada
 import qualified Ledger.Constraints as Constraints
-import Perun hiding (abort, close, dispute, forceClose, fund, open, start, findChannel)
+import Perun hiding (abort, close, dispute, findChannel, forceClose, fund, open, start)
 import Perun.Error
 import Plutus.Contract
 import qualified Plutus.V1.Ledger.Scripts as Scripts
