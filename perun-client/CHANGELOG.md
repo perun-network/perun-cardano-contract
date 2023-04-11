@@ -1,4 +1,4 @@
-# Revision history for perun-plutus
+# Revision history for perun-client
 
 ## 0.1.0.0 -- YYYY-mm-dd
 
