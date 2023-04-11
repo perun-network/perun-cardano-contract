@@ -1,0 +1,134 @@
+cabal-version:      2.4
+name:               perun-contract
+version:            0.1.0.0
+
+Tested-With: GHC ==8.10.7
+
+-- A short (one-line) description of the package.
+-- synopsis:
+
+-- A longer description of the package.
+-- description:
+
+-- A URL where users can report bugs.
+-- bug-reports:
+
+-- The license under which the package is released.
+-- license:
+author:             Jan Bormet
+                    Norbert Dzikowski
+maintainer:         feedback@perun.network
+
+-- A copyright notice.
+-- copyright:
+-- category:
+extra-source-files: CHANGELOG.md
+
+common shared
+  default-language: Haskell2010
+  build-depends:    base ^>=4.14.1.0
+  ghc-options:      -Wall
+                    -- Safe to dis-/enable compiler flags. They mainly solve
+                    -- issues compiling onchain code because depending on the
+                    -- situation plutus-core might not compile due to GHC (Haskell
+                    -- compiler) trying to access definitions used on-chain BEFORE
+                    -- they are known to GHC.
+                    -fno-ignore-interface-pragmas
+                    -fno-omit-interface-pragmas
+                    -fobject-code
+                    -Wno-orphans
+
+library
+    import: shared
+    exposed-modules: Perun
+                   , Perun.Onchain
+                   , Perun.Offchain
+                   , Perun.Offchain.ChannelTxPool
+                   , Perun.Offchain.Event
+                   , Perun.Offchain.State
+                   , Perun.Error
+                   , Perun.Adjudicator
+                   , Perun.Adjudicator.History
+                   , Perun.Adjudicator.Adjudicator
+                   , Perun.Orphans
+
+    -- Modules included in this library but not exported.
+    other-modules:   Perun.Offchain.ChannelTxPool.ChannelTxPool
+                   , Perun.Offchain.ChannelTxPool.Types
+
+    -- LANGUAGE extensions used by modules in this package.
+    default-extensions: FlexibleInstances
+                      , LambdaCase
+                      , TupleSections
+                      , TemplateHaskell
+                      , PatternSynonyms
+                      , DataKinds
+                      , FlexibleContexts
+                      , OverloadedStrings
+                      , TypeApplications
+                      , TypeOperators
+                      , DeriveAnyClass
+                      , DeriveDataTypeable
+                      , DeriveGeneric
+                      , NumericUnderscores
+                      , DerivingStrategies
+                      , DerivingVia
+                      , FlexibleContexts
+                      , GeneralizedNewtypeDeriving
+                      , MultiParamTypeClasses
+                      , RecordWildCards
+                      , ScopedTypeVariables
+                      , RankNTypes
+                      , TypeFamilies
+
+    build-depends:
+                      , aeson
+                      , containers
+                      , plutus-contract
+                      , bytestring
+                      , data-default
+                      , openapi3
+                      , plutus-ledger
+                      , plutus-ledger-api
+                      , plutus-ledger-constraints
+                      , plutus-script-utils
+                      , plutus-tx-plugin
+                      , plutus-chain-index-core
+                      , playground-common
+                      , plutus-tx
+                      , lens
+                      , text
+                      , hex-text
+                      , binary
+    hs-source-dirs:   src
+
+test-suite perun-contract-test
+  import:             shared
+  type:               exitcode-stdio-1.0
+  hs-source-dirs:     test
+  main-is:            Spec.hs
+  ghc-options:        -threaded
+                      -rtsopts
+                      -with-rtsopts=-N
+                      -fno-warn-type-defaults
+  other-modules:      Perun.PerunSpec
+                    , Perun.TestCases
+                    , Perun.Test.EvilContract
+  build-depends:      hspec
+                    , QuickCheck -any
+                    , tasty -any
+                    , tasty-hunit -any
+                    , tasty-quickcheck -any
+                    , cardano-crypto
+                    , perun-contract
+                    , plutus-contract
+                    , aeson
+                    , containers
+                    , plutus-ledger
+                    , plutus-ledger-constraints
+                    , plutus-ledger-api
+                    , plutus-tx
+                    , lens
+                    , text
+                    , extra
+                    , bytestring
