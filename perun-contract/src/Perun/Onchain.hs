@@ -15,18 +15,15 @@ module Perun.Onchain
     Action (..),
     minAda,
     isLegalOutValue,
-    ensureKnownCurrencies,
     isValidStateTransition,
     extractVerifiedState,
     defaultValidMsRange,
     defaultValidMsRangeSkew,
-    printJson,
-    printSchemas,
-    stage,
     typedChannelValidator,
     channelValidator,
     channelHash,
     channelAddress,
+    channelCardanoAddress,
     channelTokenAsset,
     channelTokenSymbol,
     channelTokenName,
@@ -40,15 +37,17 @@ where
 
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Data
+import qualified Data.OpenApi as OpenApi
 import Data.Text (unpack)
 import GHC.Generics (Generic)
 import Ledger
   ( Address,
-    CurrencySymbol,
+    CardanoAddress,
     DiffMilliSeconds (..),
     Extended (..),
     Interval (..),
     LowerBound (..),
+    NetworkId,
     POSIXTime,
     PaymentPubKey (..),
     PaymentPubKeyHash (..),
@@ -58,22 +57,24 @@ import Ledger
     from,
     fromMilliSeconds,
     member,
-    minAdaTxOut,
+    minAdaTxOutEstimated,
     strictLowerBound,
     strictUpperBound,
     toPubKeyHash,
   )
-import Ledger.Ada as Ada
-import qualified Ledger.Constraints as Constraints
 import Ledger.Scripts hiding (version)
 import Ledger.Scripts.Orphans ()
-import Ledger.Value (AssetClass (..), TokenName (..), assetClass, assetClassValueOf, geq)
-import qualified Ledger.Value as Value
-import Playground.Contract (ensureKnownCurrencies, printJson, printSchemas, stage)
+import qualified Ledger.Tx.Constraints as Constraints
+import qualified Ledger.Typed.Scripts as Scripts
+import Plutus.ChainIndex.Types ()
 import Plutus.Contract.Oracle (SignedMessage (..), verifySignedMessageConstraints)
-import Plutus.Script.Utils.V2.Address (mkValidatorAddress)
-import qualified Plutus.Script.Utils.V2.Scripts as Scripts
-import qualified Plutus.Script.Utils.V2.Typed.Scripts as Scripts hiding (validatorHash)
+import Plutus.Script.Utils.Ada as Ada
+import Plutus.Script.Utils.V2.Address (mkValidatorAddress, mkValidatorCardanoAddress)
+import qualified Plutus.Script.Utils.V2.Typed.Scripts as V2
+import Plutus.Script.Utils.Value (AssetClass (..), TokenName (..), assetClass, assetClassValueOf, geq)
+import qualified Plutus.Script.Utils.Value as Value
+import Plutus.V1.Ledger.Api (CurrencySymbol)
+import qualified Plutus.V2.Ledger.Api as PV2
 import Plutus.V2.Ledger.Contexts
   ( ScriptContext (..),
     TxInInfo (..),
@@ -92,7 +93,6 @@ import Plutus.V2.Ledger.Tx
   )
 import qualified PlutusTx
 import PlutusTx.Prelude hiding (unless)
-import Schema (ToSchema (..))
 import Text.Hex (encodeHex)
 import qualified Prelude as P
 
@@ -103,11 +103,16 @@ import qualified Prelude as P
 --
 
 minAda :: Integer
-minAda = getLovelace minAdaTxOut
+minAda = getLovelace minAdaTxOutEstimated
 
 newtype ChannelID = ChannelID BuiltinByteString
-  deriving (ToJSON, FromJSON, ToSchema, Eq, P.Eq, P.Ord) via BuiltinByteString
+  deriving (ToJSON, FromJSON, Eq, P.Eq, P.Ord) via BuiltinByteString
   deriving (Generic, Data)
+
+deriving anyclass instance OpenApi.ToSchema ChannelID
+
+-- instance OpenApi.ToSchema BuiltinByteString where
+--   declareNamedSchema _ = P.pure $ OpenApi.NamedSchema (Just "Bytes") P.mempty
 
 PlutusTx.unstableMakeIsData ''ChannelID
 PlutusTx.makeLift ''ChannelID
@@ -120,7 +125,9 @@ data ChannelToken = ChannelToken
     ctName :: TokenName,
     ctTxOutRef :: !TxOutRef
   }
-  deriving (Data, Generic, ToJSON, FromJSON, ToSchema, P.Eq, P.Show)
+  deriving (Data, Generic, ToJSON, FromJSON, P.Eq, P.Show)
+
+deriving instance OpenApi.ToSchema ChannelToken
 
 instance P.Ord ChannelToken where
   {-# INLINEABLE compare #-}
@@ -183,7 +190,7 @@ data ChannelState = ChannelState
     version :: !Integer,
     final :: !Bool
   }
-  deriving (Data, Generic, ToJSON, FromJSON, ToSchema)
+  deriving (Data, Generic, ToJSON, FromJSON, OpenApi.ToSchema)
   deriving stock (P.Eq, P.Show)
 
 instance Eq ChannelState where
@@ -213,8 +220,8 @@ instance Eq SignedState where
 
 -- TODO: datumHash a == datumHash b
 
-instance ToSchema (SignedMessage ChannelState) where
-  toSchema = toSchema @(Signature, (DatumHash, ChannelState))
+-- instance OpenApi.ToSchema (SignedMessage ChannelState) where
+--   toSchema = toSchema @(Signature, (DatumHash, ChannelState))
 
 PlutusTx.unstableMakeIsData ''SignedState
 PlutusTx.makeLift ''SignedState
@@ -541,21 +548,26 @@ mkChannelValidator cID oldDatum action ctx =
 --
 
 typedChannelValidator :: ChannelID -> Scripts.TypedValidator ChannelTypes
-typedChannelValidator =
-  Scripts.mkTypedValidatorParam @ChannelTypes @ChannelID
-    $$(PlutusTx.compile [||mkChannelValidator||])
+typedChannelValidator cid =
+  V2.mkTypedValidator @ChannelTypes
+    ( $$(PlutusTx.compile [||mkChannelValidator||])
+        `PlutusTx.applyCode` PlutusTx.liftCode cid
+    )
     $$(PlutusTx.compile [||wrap||])
   where
-    wrap = Scripts.mkUntypedValidator @ChannelDatum @ChannelAction
+    wrap = Scripts.mkUntypedValidator
 
-channelValidator :: ChannelID -> Validator
-channelValidator = Scripts.validatorScript . typedChannelValidator
+channelValidator :: ChannelID -> PV2.Validator
+channelValidator = V2.validatorScript . typedChannelValidator
 
-channelHash :: ChannelID -> ValidatorHash
-channelHash = Scripts.validatorHash . channelValidator
+channelHash :: ChannelID -> PV2.ValidatorHash
+channelHash = V2.validatorHash . typedChannelValidator
 
 channelAddress :: ChannelID -> Address
 channelAddress = mkValidatorAddress . channelValidator
+
+channelCardanoAddress :: NetworkId -> ChannelID -> CardanoAddress
+channelCardanoAddress nid = mkValidatorCardanoAddress nid . channelValidator
 
 data Action = Mint | Burn
   deriving (P.Eq, P.Show)
@@ -596,7 +608,7 @@ mkChannelTokenMintingPolicy oref =
     $$(PlutusTx.compile [||wrap . mkChannelTokenPolicy||])
       `PlutusTx.applyCode` PlutusTx.liftCode oref
   where
-    wrap = Scripts.mkUntypedMintingPolicy @(ValidatorHash, Action)
+    wrap = Scripts.mkUntypedMintingPolicy
 
 mkVersionedChannelTokenMintinPolicy :: TxOutRef -> Versioned MintingPolicy
 mkVersionedChannelTokenMintinPolicy oref = Versioned (mkChannelTokenMintingPolicy oref) PlutusV2
