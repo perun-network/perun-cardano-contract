@@ -14,6 +14,7 @@ import Control.Lens
 import Data.Aeson
 import Data.Text (Text)
 import GHC.Generics (Generic)
+import Ledger.Tx (ToCardanoError)
 import Perun.Adjudicator.History
 import Plutus.Contract
 
@@ -123,8 +124,11 @@ data ChannelTxErr
   | ChannelCorruptedChainIndexErr
   | WrongThreadTokenErr
   | InvalidChannelDatumErr
+  | SomeToCardanoErr !ToCardanoError
   | InvalidTxOutRefErr
   | InvalidThreadTokenErr
+  | PerunAsReferenceUnsupportedErr
+  | InlineDatumsUnsupportedErr
   deriving (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
 

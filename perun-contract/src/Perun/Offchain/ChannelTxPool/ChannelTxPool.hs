@@ -12,6 +12,7 @@ module Perun.Offchain.ChannelTxPool.ChannelTxPool
   )
 where
 
+import Cardano.Node.Emulator.Params (pNetworkId)
 import Control.Lens
 import Control.Monad (unless)
 import Control.Monad.Error.Lens (throwing)
@@ -19,8 +20,8 @@ import Data.Default
 import Data.Either (rights)
 import Data.List (elemIndex, find, foldl')
 import qualified Data.Map.Strict as Map
-import Ledger hiding (ChainIndexTxOut)
-import Ledger.Value (assetClassValueOf)
+import Ledger hiding (ChainIndexTxOut, Value)
+import Ledger.Tx.Internal (TxIn (..))
 import Perun.Error
 import Perun.Offchain (getChannelId)
 import Perun.Offchain.ChannelTxPool.Types
@@ -29,17 +30,20 @@ import Plutus.ChainIndex hiding (txFromTxId)
 import Plutus.ChainIndex.Api
 import Plutus.Contract
 import Plutus.Contract.Request
+import Plutus.Script.Utils.Value (assetClassValueOf)
 import PlutusTx
 
 txpoolsForChannel ::
   (AsPerunError e, AsContractError e) =>
   ChannelID ->
   Contract w s e [ChannelTxPool]
-txpoolsForChannel cid = allTxosAt (channelAddress cid) >>= mkTxPools cid
+txpoolsForChannel cid = do
+  networkId <- pNetworkId <$> getParams
+  allTxosAt (channelCardanoAddress networkId cid) >>= mkTxPools cid
 
 allTxosAt ::
   (AsPerunError e, AsContractError e) =>
-  Address ->
+  CardanoAddress ->
   Contract w s e [TxOutRef]
 allTxosAt addr = go (Just def)
   where
@@ -184,12 +188,15 @@ resolveInput cid citx inputCitxs = do
 
     inputUtxo ref@(TxOutRef txId idx) = do
       inputCitx ref >>= \citx' -> case citx' ^. citxOutputs of
-        InvalidTx -> throwError InvalidTxErr
+        InvalidTx _ -> throwError InvalidTxErr
         ValidTx outs -> return $ outs !! fromIntegral idx
 
     resolveValidChannelInputs :: ChainIndexTx -> TxIn -> Either ChannelTxErr (TxOutRef, ChannelAction, ChannelDatum)
-    resolveValidChannelInputs citx (TxIn ref (Just (ConsumeScriptAddress (Versioned otherValidator _) r rd)))
-      | ourValidator == channelValidator cid = do
+    resolveValidChannelInputs citx (TxIn ref (Just ev)) =
+      -- @(ScriptAddress (Versioned otherValidator _) r rd)))
+      case ev of
+        (ScriptAddress (Left (Versioned otherValidator _)) r (Just rd)) -> do
+          unless (otherValidator == ourValidator) $ throwError ChannelTxErr
           d <- case channelDatumFromDatum rd of
             Right d -> return d
             Left err -> throwError err
@@ -197,8 +204,12 @@ resolveInput cid citx inputCitxs = do
             Just tr -> return tr
             Nothing -> throwError NoChannelInputRedeemerErr
           iUtxo <- inputUtxo ref
-          unless (hasValidThreadToken cid (channelToken d) (citoValue iUtxo)) $ throwError WrongThreadTokenErr
+          unless (hasValidThreadToken cid (channelToken d) (fromCardanoValue $ citoValue iUtxo)) $ throwError WrongThreadTokenErr
           return (ref, chanAction, d)
+        (ScriptAddress (Left (Versioned otherValidator _)) r Nothing) -> do
+          throwError InlineDatumsUnsupportedErr
+        (ScriptAddress (Right refTxOut) _ _) -> do
+          throwError PerunAsReferenceUnsupportedErr
     resolveValidChannelInputs nCitx (TxIn ref Nothing) = do
       iCitx <- inputCitx ref
       mtype <- resolveTxInType cid ref iCitx nCitx
@@ -219,7 +230,7 @@ resolveTxInType cid ref pCitx nCitx = do
     Nothing -> throwError NoOutputMatchinInputErr
     Just txout -> return txout
   datum <- outputDatumToDatum $ citoDatum txout
-  return . Just $ ConsumeScriptAddress (Versioned (channelValidator cid) PlutusV2) redeemer datum
+  return . Just $ ScriptAddress (Left (Versioned (channelValidator cid) PlutusV2)) redeemer (Just datum)
   where
     outputDatumToDatum NoOutputDatum = throwError NoDatumForInputErr
     outputDatumToDatum (OutputDatum d) = return d
@@ -234,7 +245,7 @@ resolveOutput ::
   Either ChannelTxErr (TxOutRef, ChannelDatum)
 resolveOutput cid citx = do
   os <- case citx ^. citxOutputs of
-    InvalidTx -> throwError UnexpectedInvalidTxErr
+    InvalidTx _ -> throwError UnexpectedInvalidTxErr
     ValidTx os -> return os
   let channelOutputs = rights $ zipWith retrieveChannelOutput [1 ..] os
   case channelOutputs of
@@ -269,7 +280,7 @@ resolveOutput cid citx = do
         Nothing -> throwError InvalidChannelDatumErr
         Just cDatum -> return cDatum
       unless (isValidDatum cid cDatum) $ throwError InvalidChannelDatumErr
-      unless (hasValidThreadToken cid (channelToken cDatum) (citoValue citxOut)) $ throwError WrongThreadTokenErr
+      unless (hasValidThreadToken cid (channelToken cDatum) (fromCardanoValue $ citoValue citxOut)) $ throwError WrongThreadTokenErr
       (txOutRef,) <$> channelDatumFromDatum d
 
 parseDatumFromOutputDatum :: ChainIndexTx -> OutputDatum -> Either ChannelTxErr Datum
