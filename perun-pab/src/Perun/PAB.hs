@@ -31,7 +31,6 @@ import GHC.Generics (Generic)
 import Perun.Adjudicator as Perun
 import Perun.Offchain as Perun
 import Perun.Onchain as Perun
-import Perun.Orphans ()
 import Plutus.PAB.Effects.Contract.Builtin (SomeBuiltin (..))
 import qualified Plutus.PAB.Effects.Contract.Builtin as Builtin
 import Prettyprinter (Pretty (..), viaShow)

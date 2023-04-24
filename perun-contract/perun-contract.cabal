@@ -50,7 +50,6 @@ library
                    , Perun.Adjudicator
                    , Perun.Adjudicator.History
                    , Perun.Adjudicator.Adjudicator
-                   , Perun.Orphans
 
     -- Modules included in this library but not exported.
     other-modules:   Perun.Offchain.ChannelTxPool.ChannelTxPool
