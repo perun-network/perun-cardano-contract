@@ -6,6 +6,7 @@
 
 module Perun.Offchain where
 
+import Cardano.Node.Emulator.Params (pNetworkId)
 import Control.Monad as CM hiding (fmap)
 import Control.Monad.Error.Lens
 import Data.Aeson (FromJSON, ToJSON)
@@ -15,24 +16,24 @@ import Data.List (genericSplitAt)
 import qualified Data.Map as Map
 import Data.Maybe (fromJust)
 import Data.Monoid (Last (..))
+import qualified Data.OpenApi as OpenApi
 import Data.Text (Text)
 import GHC.Generics (Generic)
 import Ledger hiding (singleton)
-import Ledger.Ada as Ada
-import qualified Ledger.Constraints as Constraints
-import Ledger.Constraints.OffChain ()
 import qualified Ledger.Scripts as S
-import Ledger.Value (AssetClass (..), valueOf)
+import qualified Ledger.Tx.Constraints as Constraints
 import Perun.Error
 import Perun.Onchain
-import Plutus.ChainIndex.Types hiding (ChainIndexTxOut)
+import Plutus.ChainIndex.Types
 import Plutus.Contract
 import Plutus.Contract.Oracle (SignedMessage (..))
+import Plutus.Script.Utils.Ada as Ada
 import Plutus.Script.Utils.Scripts as Scripts
+import Plutus.Script.Utils.Value (AssetClass (..), valueOf)
+import Plutus.PAB.Webserver.Types ()
 import qualified PlutusTx
 import qualified PlutusTx.Builtins as Builtins
 import PlutusTx.Prelude hiding (unless)
-import Schema (ToSchema)
 import Text.Hex (encodeHex)
 import Text.Printf (printf)
 import qualified Prelude as P
@@ -55,22 +56,24 @@ data OpenParams = OpenParams
     spTimeLock :: !Integer,
     spNonce :: !BuiltinByteString
   }
-  deriving (Generic, ToJSON, FromJSON, ToSchema)
+  deriving (Generic, ToJSON, FromJSON, OpenApi.ToSchema)
   deriving stock (P.Eq, P.Show)
+
+deriving newtype instance OpenApi.ToSchema PaymentPubKey
 
 data FundParams = FundParams
   { fpChannelId :: !ChannelID,
     fpChannelToken :: !AssetClass,
     fpIndex :: !Integer
   }
-  deriving (Generic, ToJSON, FromJSON, ToSchema)
+  deriving (Generic, ToJSON, FromJSON, OpenApi.ToSchema)
   deriving stock (P.Eq, P.Show)
 
 data AbortParams = AbortParams
   { apChannelId :: !ChannelID,
     apChannelToken :: !AssetClass
   }
-  deriving (Generic, ToJSON, FromJSON, ToSchema)
+  deriving (Generic, ToJSON, FromJSON, OpenApi.ToSchema)
   deriving stock (P.Eq, P.Show)
 
 data AllSignedStates = AllSignedStates
@@ -80,7 +83,7 @@ data AllSignedStates = AllSignedStates
   deriving (Generic, ToJSON, FromJSON)
   deriving stock (P.Eq, P.Show)
 
-deriving instance ToSchema AllSignedStates
+deriving instance OpenApi.ToSchema AllSignedStates
 
 data DisputeParams = DisputeParams
   { dpChannelId :: !ChannelID,
@@ -88,7 +91,7 @@ data DisputeParams = DisputeParams
     dpSigningPKs :: ![PaymentPubKey],
     dpSignedState :: !AllSignedStates
   }
-  deriving (Generic, ToJSON, FromJSON, ToSchema)
+  deriving (Generic, ToJSON, FromJSON, OpenApi.ToSchema)
   deriving stock (P.Eq, P.Show)
 
 data CloseParams = CloseParams
@@ -97,14 +100,14 @@ data CloseParams = CloseParams
     cpSigningPKs :: ![PaymentPubKey],
     cpSignedState :: !AllSignedStates
   }
-  deriving (Generic, ToJSON, FromJSON, ToSchema)
+  deriving (Generic, ToJSON, FromJSON, OpenApi.ToSchema)
   deriving stock (P.Eq, P.Show)
 
 data ForceCloseParams = ForceCloseParams
   { fcpChannelId :: !ChannelID,
     fcpChannelToken :: !AssetClass
   }
-  deriving (Generic, ToJSON, FromJSON, ToSchema)
+  deriving (Generic, ToJSON, FromJSON, OpenApi.ToSchema)
   deriving stock (P.Eq, P.Show)
 
 type ChannelSchema =
@@ -430,53 +433,97 @@ earliestFirstCloseTime :: POSIXTime -> Integer -> POSIXTime
 earliestFirstCloseTime timeStamp timeLock = timeStamp + POSIXTime timeLock
 
 -- | findChannelWithSync is an optimistic findChannel handler. It first tries
--- to find a valid channel for the given channel id and thread token and if not successful,
--- retries it again AFTER making sure to synchronize with the chainindex to its current slot.
+-- to find a channel and if not successful, retries it again AFTER making sure
+-- to synchronize with the chainindex to its current slot.
 findChannelWithSync ::
   (AsPerunError e, AsContractError e) =>
   ChannelID ->
+  Contract w s e (TxOutRef, DecoratedTxOut, ChannelDatum)
+findChannelWithSync cid =
+  handleError errorHandler $ findChannel cid
+  where
+    errorHandler (FindChannelError _) = do
+      logWarn @Text "Optimistic findChannel not succeeded. Trying again after syncing PAB with Chainindex."
+      retryAfterSync $ findChannel cid
+    errorHandler err = throwing _PerunError err
+
+-- | findChannelWithSync' is an optimistic findChannel handler. It first tries
+-- to find a valid channel for the given channel id and thread token and if not successful,
+-- retries it again AFTER making sure to synchronize with the chainindex to its current slot.
+findChannelWithSync' ::
+  (AsPerunError e, AsContractError e) =>
+  ChannelID ->
   AssetClass ->
-  Contract w s e (TxOutRef, ChainIndexTxOut, ChannelDatum)
-findChannelWithSync cid ct =
-  handleError errorHandler $ findChannel cid ct
+  Contract w s e (TxOutRef, DecoratedTxOut, ChannelDatum)
+findChannelWithSync' cid ct =
+  handleError errorHandler $ findChannel' cid
   where
     errorHandler (FindChannelError _) = do
       logWarn @Text "Optimistic findChannel not succeeded. Trying again after syncing PAB with Chainindex."
       retryAfterSync $ findChannel cid ct
     errorHandler err = throwing _PerunError err
 
-getChannelId :: Channel -> ChannelID
-getChannelId channel = ChannelID . S.dataHash $ PlutusTx.toBuiltinData channel
-
--- | findChannel searches the utxos at the channel address (parameterized by the channel id)
--- for an utxo that has:
--- 1. the given ThreadToken named in the utxo's datum and attached to the utxo's value.
--- 2. the ThreadToken's TokenName is equal to the ValidatorHash of the channel validator for the given channel id.
--- 3. the channelParameters in the utxo's evaluating to the given channel id.
-findChannel ::
+--- | findChannel' searches the utxos at the channel address (parameterized by the channel id)
+--- for an utxo that has:
+--- 1. the given ThreadToken named in the utxo's datum and attached to the utxo's value.
+--- 2. the ThreadToken's TokenName is equal to the ValidatorHash of the channel validator for the given channel id.
+--- 3. the channelParameters in the utxo's evaluating to the given channel id.
+findChannel' ::
   (AsPerunError e, AsContractError e) =>
   ChannelID ->
   AssetClass ->
-  Contract w s e (TxOutRef, ChainIndexTxOut, ChannelDatum)
-findChannel cID ct = do
-  utxos <- utxosAt $ channelAddress cID
+  Contract w s e (TxOutRef, DecoratedTxOut, ChannelDatum)
+findChannel' cID ct = do
+  networkId <- pNetworkId <$> getParams
+  utxos <- utxosAt $ channelCardanoAddress networkId cID
   let utxoList = Map.toList utxos
   filterChannelUtxos utxoList
   where
-    filterChannelUtxos :: (AsPerunError e, AsContractError e) => [(TxOutRef, ChainIndexTxOut)] -> Contract w s e (TxOutRef, ChainIndexTxOut, ChannelDatum)
+    filterChannelUtxos :: (AsPerunError e, AsContractError e) => [(TxOutRef, DecoratedTxOut)] -> Contract w s e (TxOutRef, DecoratedTxOut, ChannelDatum)
     filterChannelUtxos [] = throwing _FindChannelError NoUTXOsError
     filterChannelUtxos ((oref, o) : xs) = do
       let AssetClass (s, tn) = ct
-      if valueOf (_ciTxOutValue o) s tn == 1
+      if valueOf (fromCardanoValue $ _decoratedTxOutValue o) s tn == 1
         then -- Note: If any check fails at this point, we can safely throw an error
         -- because we know that the utxo at this address carries the ThreadToken.AbortCase
         -- Therefore, no other utxo can carry the ThreadToken, as it is an NFT.
-        case _ciTxOutScriptDatum o of
-          (_, Just (Datum e)) -> case PlutusTx.fromBuiltinData e of
+        case _decoratedTxOutScriptDatum o of
+          (_, (DatumInline e)) -> case PlutusTx.fromBuiltinData . getDatum $ e of
             Nothing -> throwing _FindChannelError WrongDatumTypeError
-            Just d@ChannelDatum {..} -> if (channelTokenAsset channelToken) == ct && cID == getChannelId channelParameters && (channelTokenName (channelHash cID)) == tn then return (oref, o, d) else throwing _FindChannelError InvalidDatumError
+            Just d@ChannelDatum {..} ->
+              if (channelTokenAsset channelToken) == ct && cID == getChannelId channelParameters && (channelTokenName (channelHash cID)) == tn
+                then return (oref, o, d)
+                else throwing _FindChannelError InvalidDatumError
+          (_, (DatumInBody e)) -> case PlutusTx.fromBuiltinData . getDatum $ e of
+            Nothing -> throwing _FindChannelError WrongDatumTypeError
+            Just d@ChannelDatum {..} ->
+              if (channelTokenAsset channelToken) == ct && cID == getChannelId channelParameters && (channelTokenName (channelHash cID)) == tn
+                then return (oref, o, d)
+                else throwing _FindChannelError InvalidDatumError
           _otherwise -> throwing _FindChannelError DatumMissingError
         else filterChannelUtxos xs
+
+getChannelId :: Channel -> ChannelID
+getChannelId channel = ChannelID . S.dataHash $ PlutusTx.toBuiltinData channel
+
+findChannel ::
+  (AsPerunError e, AsContractError e) =>
+  ChannelID ->
+  Contract w s e (TxOutRef, DecoratedTxOut, ChannelDatum)
+findChannel cID = do
+  networkId <- pNetworkId <$> getParams
+  utxos <- utxosAt $ channelCardanoAddress networkId cID
+  case Map.toList utxos of
+    [(oref, o)] -> case _decoratedTxOutScriptDatum o of
+      (_, (DatumInline e)) -> case PlutusTx.fromBuiltinData . getDatum $ e of
+        Nothing -> throwing _FindChannelError WrongDatumTypeError
+        Just d@ChannelDatum {} -> return (oref, o, d)
+      (_, (DatumInBody e)) -> case PlutusTx.fromBuiltinData . getDatum $ e of
+        Nothing -> throwing _FindChannelError WrongDatumTypeError
+        Just d@ChannelDatum {} -> return (oref, o, d)
+      _otherwise -> throwing _FindChannelError DatumMissingError
+    [] -> throwing _FindChannelError NoUTXOsError
+    _utxos -> throwing _FindChannelError UnexpectedNumberOfUTXOsError
 
 addFunding :: Integer -> Integer -> [Integer] -> [Integer]
 addFunding amount idx f =
