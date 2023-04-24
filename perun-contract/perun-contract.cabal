@@ -88,13 +88,14 @@ library
                       , bytestring
                       , data-default
                       , openapi3
+                      , cardano-node-emulator
                       , plutus-ledger
+                      , plutus-pab
                       , plutus-ledger-api
-                      , plutus-ledger-constraints
+                      , plutus-tx-constraints
                       , plutus-script-utils
                       , plutus-tx-plugin
                       , plutus-chain-index-core
-                      , playground-common
                       , plutus-tx
                       , lens
                       , text
@@ -125,7 +126,7 @@ test-suite perun-contract-test
                     , aeson
                     , containers
                     , plutus-ledger
-                    , plutus-ledger-constraints
+                    , plutus-tx-constraints
                     , plutus-ledger-api
                     , plutus-tx
                     , lens
