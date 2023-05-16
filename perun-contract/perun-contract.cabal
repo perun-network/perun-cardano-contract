@@ -127,8 +127,15 @@ test-suite perun-contract-test
                     , plutus-ledger
                     , plutus-tx-constraints
                     , plutus-ledger-api
+                    , plutus-chain-index-core
                     , plutus-tx
+                    , plutus-script-utils
                     , lens
                     , text
                     , extra
                     , bytestring
+                    , freer-simple
+                    , freer-extras
+                    , mtl
+                    , quickcheck-dynamic
+                    , contractmodel
