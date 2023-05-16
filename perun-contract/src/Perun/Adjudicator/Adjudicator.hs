@@ -167,7 +167,7 @@ waitForUpdate cID = do
                   Left err -> throwing _SubscriptionError $ ChannelErr err
           waitForStart
         Right currentOcs@(OnChainState ocsTxOutRef) -> do
-          promiseBind (utxoIsSpent (Typed.tyTxOutRefRef ocsTxOutRef)) $ \txn -> do
+          promiseBind (utxoIsSpent (Scripts.tyTxOutRefRef ocsTxOutRef)) $ \txn -> do
             logInfo @String $ unwords ["Found new onchain state for channel:", show cID]
             logInfo @String $ unwords ["Channel update executed in transaction:", show $ _citxTxId txn]
             outRefMap <-

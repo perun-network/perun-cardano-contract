@@ -21,7 +21,7 @@ import qualified Data.Semigroup as Semigroup
 import GHC.Generics (Generic)
 import Ledger
 import qualified Ledger.Tx.Constraints as Constraints
-import Perun hiding (abort, close, dispute, findChannel, forceClose, fund, open, start)
+import Perun hiding (abort, close, dispute, forceClose, fund, open, start)
 import Perun.Error
 import Plutus.Contract
 import Plutus.Script.Utils.Ada as Ada
@@ -111,20 +111,6 @@ fund EvilFund {..} = do
     FundViolateChannelIntegrity -> fundViolateChannelIntegrity efChannelId
     FundInvalidFunded -> fundInvalidFunded efChannelId
     FundAlreadyFunded -> fundAlreadyFunded efChannelId
-
-findChannel ::
-  ChannelID ->
-  Contract w s PerunError (TxOutRef, ChainIndexTxOut, ChannelDatum)
-findChannel cID = do
-  utxos <- utxosAt $ channelAddress cID
-  case Map.toList utxos of
-    [(oref, o)] -> case _ciTxOutScriptDatum o of
-      (_, Just (Datum e)) -> case PlutusTx.fromBuiltinData e of
-        Nothing -> throwing _FindChannelError WrongDatumTypeError
-        Just d@ChannelDatum {} -> return (oref, o, d)
-      _otherwise -> throwing _FindChannelError DatumMissingError
-    [] -> throwing _FindChannelError NoUTXOsError
-    _utxos -> throwing _FindChannelError UnexpectedNumberOfUTXOsError
 
 fundViolateChannelIntegrity :: ChannelID -> Contract EvilContractState s PerunError ()
 fundViolateChannelIntegrity cid = do

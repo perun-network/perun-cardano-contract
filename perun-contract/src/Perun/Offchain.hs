@@ -27,10 +27,10 @@ import Perun.Onchain
 import Plutus.ChainIndex.Types
 import Plutus.Contract
 import Plutus.Contract.Oracle (SignedMessage (..))
+import Plutus.PAB.Webserver.Types ()
 import Plutus.Script.Utils.Ada as Ada
 import Plutus.Script.Utils.Scripts as Scripts
 import Plutus.Script.Utils.Value (AssetClass (..), valueOf)
-import Plutus.PAB.Webserver.Types ()
 import qualified PlutusTx
 import qualified PlutusTx.Builtins as Builtins
 import PlutusTx.Prelude hiding (unless)
@@ -177,7 +177,7 @@ fund ::
   FundParams ->
   Contract w s e ()
 fund FundParams {..} = do
-  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync fpChannelId fpChannelToken
+  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync' fpChannelId fpChannelToken
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   -- TODO add more checks before funding
   unless (all isLegalOutValue (balances state)) . throwing_ $ _InsufficientMinimumAdaBalanceError
@@ -210,7 +210,7 @@ abort ::
   AbortParams ->
   Contract w s e ()
 abort (AbortParams cId ct) = do
-  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync cId ct
+  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync' cId ct
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   -- TODO: This still gives the potential to lock a channel?
   unless (all isLegalOutValue funding) . throwing_ $ _InsufficientMinimumAdaBalanceError
@@ -297,7 +297,7 @@ dispute (DisputeParams dpChannelId ct keys ast) = do
       dState = extractVerifiedState signedState keys
   unless ((channelId dState) == dpChannelId) . throwing_ $ _ChannelIDMismatchError
   now <- currentTime
-  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync dpChannelId ct
+  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync' dpChannelId ct
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   unless (all isLegalOutValue (balances dState)) . throwing_ $ _InsufficientMinimumAdaBalanceError
   unless (isValidStateTransition state dState) . throwing_ $ _InvalidStateTransitionError
@@ -373,7 +373,7 @@ close (CloseParams cId ct keys ast) = do
       s@ChannelState {..} = extractVerifiedState signedState keys
   unless (channelId == cId) . throwing_ $ _ChannelIDMismatchError
   unless final . throwing_ $ _CloseOnNonFinalChannelError
-  (oref, o, ChannelDatum {..}) <- findChannelWithSync channelId ct
+  (oref, o, ChannelDatum {..}) <- findChannelWithSync' channelId ct
   unless (all isLegalOutValue balances) . throwing_ $ _InsufficientMinimumAdaBalanceError
   unless (isValidStateTransition state s) . throwing_ $ _InvalidStateTransitionError
   unless funded . throwing_ $ _CloseOnNonFundedChannelError
@@ -402,7 +402,7 @@ forceClose ::
   ForceCloseParams ->
   Contract w s e ()
 forceClose (ForceCloseParams cId ct) = do
-  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync cId ct
+  (oref, o, d@ChannelDatum {..}) <- findChannelWithSync' cId ct
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   unless (all isLegalOutValue (balances state)) . throwing_ $ _InsufficientMinimumAdaBalanceError
   unless disputed . throwing_ $ _ForceCloseOnNonDisputedChannelError
@@ -456,11 +456,11 @@ findChannelWithSync' ::
   AssetClass ->
   Contract w s e (TxOutRef, DecoratedTxOut, ChannelDatum)
 findChannelWithSync' cid ct =
-  handleError errorHandler $ findChannel' cid
+  handleError errorHandler $ findChannel' cid ct
   where
     errorHandler (FindChannelError _) = do
       logWarn @Text "Optimistic findChannel not succeeded. Trying again after syncing PAB with Chainindex."
-      retryAfterSync $ findChannel cid ct
+      retryAfterSync $ findChannel' cid ct
     errorHandler err = throwing _PerunError err
 
 --- | findChannel' searches the utxos at the channel address (parameterized by the channel id)
