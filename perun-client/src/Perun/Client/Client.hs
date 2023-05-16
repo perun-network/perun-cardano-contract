@@ -189,7 +189,7 @@ privateKeyFromMnemonic (mnemonic, passphrase) =
     passphrase
 
 walletIdFromWallet :: Wallet -> Types.WalletId
-walletIdFromWallet (Wallet _ (WalletId wid)) = wid
+walletIdFromWallet (Wallet _ (WalletId wid)) = Types.WalletId wid
 
 addressFromApi :: AT.ApiAddress n -> Types.Address
 addressFromApi = AT.getApiT . fst . AT.id

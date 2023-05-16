@@ -20,12 +20,13 @@ import Data.Map as Map hiding (map)
 import qualified Data.Semigroup as Semigroup
 import GHC.Generics (Generic)
 import Ledger
-import Ledger.Ada as Ada
-import qualified Ledger.Constraints as Constraints
-import Perun hiding (abort, close, dispute, findChannel, forceClose, fund, open, start)
+import qualified Ledger.Tx.Constraints as Constraints
+import Perun hiding (abort, close, dispute, forceClose, fund, open, start)
 import Perun.Error
 import Plutus.Contract
+import Plutus.Script.Utils.Ada as Ada
 import qualified Plutus.V1.Ledger.Scripts as Scripts
+import qualified Plutus.V1.Ledger.Value as Value
 import qualified PlutusTx
 import PlutusTx.Prelude
 import Text.Printf (printf)
@@ -111,20 +112,6 @@ fund EvilFund {..} = do
     FundInvalidFunded -> fundInvalidFunded efChannelId
     FundAlreadyFunded -> fundAlreadyFunded efChannelId
 
-findChannel ::
-  ChannelID ->
-  Contract w s PerunError (TxOutRef, ChainIndexTxOut, ChannelDatum)
-findChannel cID = do
-  utxos <- utxosAt $ channelAddress cID
-  case Map.toList utxos of
-    [(oref, o)] -> case _ciTxOutScriptDatum o of
-      (_, Just (Datum e)) -> case PlutusTx.fromBuiltinData e of
-        Nothing -> throwing _FindChannelError WrongDatumTypeError
-        Just d@ChannelDatum {} -> return (oref, o, d)
-      _otherwise -> throwing _FindChannelError DatumMissingError
-    [] -> throwing _FindChannelError NoUTXOsError
-    _utxos -> throwing _FindChannelError UnexpectedNumberOfUTXOsError
-
 fundViolateChannelIntegrity :: ChannelID -> Contract EvilContractState s PerunError ()
 fundViolateChannelIntegrity cid = do
   (oref, o, d) <- findChannel cid
@@ -133,7 +120,7 @@ fundViolateChannelIntegrity cid = do
   let _newFunding = []
       newDatum = d {time = ct}
       r = Scripts.Redeemer (PlutusTx.toBuiltinData Fund)
-      v = Ada.toValue minAdaTxOut
+      v = Ada.toValue minAdaTxOutEstimated
   ledgerTx <- uncurry submitTxConstraintsWith $ uncheckedTx newDatum r cid v oref o
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
   tell . Just . Semigroup.Last . getCardanoTxId $ ledgerTx
@@ -146,7 +133,7 @@ fundInvalidFunded cid = do
   logInfo @P.String $ printf "EVIL_CONTRACT: found channel utxo with datum %s" (P.show d)
   let newDatum = d {funded = True}
       r = Scripts.Redeemer (PlutusTx.toBuiltinData Fund)
-      v = Ada.toValue minAdaTxOut
+      v = Ada.toValue minAdaTxOutEstimated
   ledgerTx <- uncurry submitTxConstraintsWith $ uncheckedTx newDatum r cid v oref o
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
   tell . Just . Semigroup.Last . getCardanoTxId $ ledgerTx
@@ -162,7 +149,7 @@ fundAlreadyFunded cid = do
       logInfo @P.String $ printf "EVIL_CONTRACT: found channel utxo with datum %s" (P.show d)
       let newDatum = d
           r = Scripts.Redeemer (PlutusTx.toBuiltinData Fund)
-          v = Ada.toValue minAdaTxOut
+          v = Ada.toValue minAdaTxOutEstimated
       ledgerTx <- uncurry submitTxConstraintsWith $ uncheckedTx newDatum r cid v oref o
       void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
       tell . Just . Semigroup.Last . getCardanoTxId $ ledgerTx
@@ -202,7 +189,7 @@ abortInvalidFunding cid = do
   logInfo @P.String $ printf "EVIL_CONTRACT: found channel utxo with datum %s" (P.show d)
   let newDatum = d
       r = Scripts.Redeemer (PlutusTx.toBuiltinData Abort)
-      v = Ada.toValue minAdaTxOut
+      v = Ada.toValue minAdaTxOutEstimated
   ledgerTx <- uncurry submitTxConstraintsWith $ uncheckedTx newDatum r cid v oref o
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
   tell . Just . Semigroup.Last . getCardanoTxId $ ledgerTx
@@ -225,7 +212,7 @@ closeUnfunded cid sst bals = do
   logInfo @P.String $ printf "EVIL_CONTRACT: found channel utxo with datum %s" (P.show d)
   let newDatum = d
       r = Scripts.Redeemer . PlutusTx.toBuiltinData . MkClose $ compressSignatures sst
-      v = Ada.toValue minAdaTxOut
+      v = Ada.toValue minAdaTxOutEstimated
       (lookups, tx) = uncheckedTx newDatum r cid v oref o
   ledgerTx <- submitTxConstraintsWith lookups (tx <> mconcat (zipWith Constraints.mustPayToPubKey (pPaymentPKs channelParameters) (map Ada.lovelaceValueOf bals)))
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
@@ -238,7 +225,7 @@ closeInvalidInputValue cid sst = do
   logInfo @P.String $ printf "EVIL_CONTRACT: found channel utxo with datum %s" (P.show d)
   let newDatum = d
       r = Scripts.Redeemer . PlutusTx.toBuiltinData . MkClose $ compressSignatures sst
-      v = Ada.toValue minAdaTxOut
+      v = Ada.toValue minAdaTxOutEstimated
   ledgerTx <- uncurry submitTxConstraintsWith $ uncheckedTx newDatum r cid v oref o
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
   tell . Just . Semigroup.Last . getCardanoTxId $ ledgerTx
@@ -255,7 +242,7 @@ forceCloseInvalidInput cid = do
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   let newDatum = d
       r = Scripts.Redeemer . PlutusTx.toBuiltinData $ ForceClose
-      v = Ada.toValue minAdaTxOut
+      v = Ada.toValue minAdaTxOutEstimated
   ledgerTx <- uncurry submitTxConstraintsWith $ uncheckedTx newDatum r cid v oref o
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
   tell . Just . Semigroup.Last . getCardanoTxId $ ledgerTx
@@ -298,7 +285,7 @@ disputeValidInput cid sst pubkeys = do
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   disputeWithDatum oref o cid sst d {state = dState, time = t, disputed = True}
 
-disputeWithDatum :: TxOutRef -> ChainIndexTxOut -> ChannelID -> AllSignedStates -> ChannelDatum -> Contract EvilContractState s PerunError ()
+disputeWithDatum :: TxOutRef -> DecoratedTxOut -> ChannelID -> AllSignedStates -> ChannelDatum -> Contract EvilContractState s PerunError ()
 disputeWithDatum oref o cid sst dat = do
   let newDatum = dat
       r = Scripts.Redeemer . PlutusTx.toBuiltinData . MkDispute $ compressSignatures sst
@@ -314,7 +301,7 @@ disputeInvalidInput cid sst = do
   logInfo @P.String $ printf "found channel utxo with datum %s" (P.show d)
   let newDatum = d
       r = Scripts.Redeemer . PlutusTx.toBuiltinData . MkDispute $ compressSignatures sst
-      v = Ada.toValue minAdaTxOut
+      v = Ada.toValue minAdaTxOutEstimated
   ledgerTx <- uncurry submitTxConstraintsWith $ uncheckedTx newDatum r cid v oref o
   void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
   tell . Just . Semigroup.Last . getCardanoTxId $ ledgerTx
@@ -332,7 +319,7 @@ evilContract = selectList [fund', abort', dispute', close', forceClose'] >> evil
     close' = endpoint @"close" close
     forceClose' = endpoint @"forceClose" forceClose
 
-uncheckedTx :: PlutusTx.ToData o => o -> Scripts.Redeemer -> ChannelID -> Value -> TxOutRef -> ChainIndexTxOut -> (Constraints.ScriptLookups ChannelTypes, Constraints.TxConstraints ChannelAction o)
+uncheckedTx :: PlutusTx.ToData o => o -> Scripts.Redeemer -> ChannelID -> Value.Value -> TxOutRef -> DecoratedTxOut -> (Constraints.ScriptLookups ChannelTypes, Constraints.TxConstraints ChannelAction o)
 uncheckedTx d r cid v oref oidx = (lookups, tx)
   where
     lookups =

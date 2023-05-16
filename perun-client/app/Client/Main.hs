@@ -19,7 +19,6 @@ import Data.Default
 import Data.Either
 import Data.Proxy
 import Data.Text (Text, pack)
-import Data.Text.Class (fromText)
 import Data.Text.Encoding (encodeUtf8)
 import GHC.TypeLits hiding (Mod)
 import Ledger (PaymentPubKeyHash (..))
@@ -33,7 +32,7 @@ import Plutus.PAB.Types (Config (..), WebserverConfig (..), defaultWebServerConf
 import qualified PlutusTx.Builtins as Builtins
 import Servant.Client.Core.BaseUrl (BaseUrl (..), Scheme (..))
 import System.Random.Stateful
-import Wallet.Emulator.Wallet (Wallet (..), WalletId (..))
+import Wallet.Emulator.Wallet (Wallet (..), WalletId (..), fromBase16)
 import Prelude hiding (concat)
 
 data CmdLineArgs = CLA
@@ -77,7 +76,7 @@ cmdLineParser =
       )
   where
     parseWallet :: Mod OptionFields String -> Parser Wallet
-    parseWallet opts = Wallet Nothing . WalletId . right . fromText . pack <$> strOption opts
+    parseWallet opts = Wallet Nothing . right . fromBase16 . pack <$> strOption opts
     right (Right a) = a
     right _ = error "parsing failed"
     parseChannelId :: Mod OptionFields String -> Parser (Maybe ChannelID)
@@ -125,7 +124,7 @@ main = execParser opts >>= main'
         (fullDesc <> progDesc "Perun Client Application")
 
 walletId :: Wallet -> Types.WalletId
-walletId (Wallet _ (WalletId wid)) = wid
+walletId (Wallet _ (WalletId wid)) = Types.WalletId wid
 
 main' :: CmdLineArgs -> IO ()
 main' (CLA aliceWallet bobWallet network mChanId) = do

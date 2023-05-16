@@ -4,7 +4,7 @@ import Data.Aeson
 import GHC.Generics
 import Perun.Offchain.Event
 import Perun.Onchain
-import qualified Plutus.Script.Utils.V1.Typed.Scripts as Typed
+import qualified Plutus.Script.Utils.V2.Typed.Scripts as Scripts
 
 newtype PerunState = PChannel ChannelDatum
   deriving (Show, Generic)
@@ -13,11 +13,11 @@ newtype PerunState = PChannel ChannelDatum
 type PerunEvent = ChannelEventsLast
 
 perunState :: OnChainState -> ChannelDatum
-perunState (OnChainState ref) = Typed.tyTxOutData . Typed.tyTxOutRefOut $ ref
+perunState (OnChainState ref) = Scripts.tyTxOutData . Scripts.tyTxOutRefOut $ ref
 
 channelTokenFromOnChainState :: OnChainState -> ChannelToken
 channelTokenFromOnChainState = channelToken . perunState
 
 newtype OnChainState = OnChainState
-  { ocsTxOutRef :: Typed.TypedScriptTxOutRef ChannelTypes
+  { ocsTxOutRef :: Scripts.TypedScriptTxOutRef ChannelTypes
   }

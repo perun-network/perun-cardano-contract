@@ -5,6 +5,7 @@ module Perun.Adjudicator.Adjudicator
   )
 where
 
+import Cardano.Node.Emulator.Params (pNetworkId)
 import Control.Lens hiding (index, para)
 import Control.Monad (unless)
 import Control.Monad.Error.Lens
@@ -26,7 +27,6 @@ import Plutus.ChainIndex hiding (tip, txFromTxId)
 import Plutus.Contract
 import Plutus.Contract.Types (Promise (..))
 import Plutus.Contract.Util (loopM)
-import qualified Plutus.Script.Utils.V1.Typed.Scripts as Typed
 import qualified Plutus.Script.Utils.V2.Typed.Scripts as Scripts
 import qualified PlutusTx
 
@@ -141,12 +141,13 @@ waitForUpdate ::
     e
     (Promise PerunEvent s e ChannelWaitingResult)
 waitForUpdate cID = do
+  networkId <- pNetworkId <$> getParams
   currentState <- getOnChainState cID
   let projectThree = (\(a, (b, c)) -> (a, b, c))
       projectFst = (\(a, (b, _)) -> (a, b))
       success = case currentState of
         Left NoOnchainStatesFoundErr -> do
-          let addr = channelAddress cID
+          let addr = channelCardanoAddress networkId cID
               -- waitForStart waits for the channel to be created.
               waitForStart = promiseBind (utxoIsProduced addr) $ \ciTx -> do
                 logInfo @String $ unwords ["Initial on-chain state UTxO produced at:", show addr]
@@ -156,7 +157,7 @@ waitForUpdate cID = do
                     -- ciTx, retry after sync.
                     r | null (concat r) -> retryAfterSync $ Control.Lens.traverse utxosTxOutTxFromTx ciTx
                     outRefMaps -> return outRefMaps
-                let produced = getStart cID (map projectThree . concat $ outRefMaps)
+                let produced = getStart cID networkId (map projectThree . concat $ outRefMaps)
                 -- If UTXOs were produced at the channel address and DID NOT
                 -- contain a start state, we continue waiting for channel
                 -- creation.
@@ -166,7 +167,7 @@ waitForUpdate cID = do
                   Left err -> throwing _SubscriptionError $ ChannelErr err
           waitForStart
         Right currentOcs@(OnChainState ocsTxOutRef) -> do
-          promiseBind (utxoIsSpent (Typed.tyTxOutRefRef ocsTxOutRef)) $ \txn -> do
+          promiseBind (utxoIsSpent (Scripts.tyTxOutRefRef ocsTxOutRef)) $ \txn -> do
             logInfo @String $ unwords ["Found new onchain state for channel:", show cID]
             logInfo @String $ unwords ["Channel update executed in transaction:", show $ _citxTxId txn]
             outRefMap <-
@@ -175,7 +176,7 @@ waitForUpdate cID = do
                         r | null r -> retryAfterSync $ utxosTxOutTxFromTx txn
                         result -> return result
                     )
-            let newStates = getStates cID (typedChannelValidator cID) outRefMap
+            let newStates = getStates cID networkId (typedChannelValidator cID) outRefMap
             case newStates of
               [] -> pure $ ChannelEnded currentOcs
               xs -> case chooser xs of
@@ -204,15 +205,15 @@ parseChannelAction (OnChainState iref) citx = do
       retryAfterSync action
     action = do
       let cInputs = citx ^. citxInputs
-          ir = Typed.tyTxOutRefRef iref
+          ir = Scripts.tyTxOutRefRef iref
       txIn <- case find ((== ir) . txInRef) cInputs of
         Just txIn -> return txIn
         _else -> throwing _SubscriptionError NoInputMatchingOnChainStateRefErr
       logInfo @String $ unwords ["Found channel input:", show txIn]
       rawAction <- case txInType txIn of
-        Just (ConsumeScriptAddress (Versioned _s _) rawAction _datum) ->
+        Just (ScriptAddress (Left (Versioned _s _)) rawAction _datum) ->
           return rawAction
-        _else -> parseChannelActionRedeemer (Typed.tyTxOutRefRef iref) citx
+        _else -> parseChannelActionRedeemer (Scripts.tyTxOutRefRef iref) citx
       logInfo @String $ unwords ["Found channel action:", show rawAction]
       case PlutusTx.fromBuiltinData . getRedeemer $ rawAction of
         Just channelAction -> do
@@ -369,9 +370,10 @@ getOnChainState ::
   ChannelID ->
   Contract PerunEvent s e (Either SubscriptionException OnChainState)
 getOnChainState cID = do
-  utxoTx <- utxosAt $ channelAddress cID
+  networkId <- pNetworkId <$> getParams
+  utxoTx <- utxosAt $ channelCardanoAddress networkId cID
   logInfo @String $ unwords ["querying onchain state for channel", show cID]
-  let states = getStates cID (typedChannelValidator cID) (Map.toList utxoTx)
+  let states = getStates cID networkId (typedChannelValidator cID) (Map.toList utxoTx)
   logInfo @String $ unwords ["found", show . length $ states, "onchain states"]
   return $ chooser states
 
@@ -392,8 +394,8 @@ chooser ocs =
           show . length $ ocs
         ]
 
-getStart :: ChannelID -> [(TxOutRef, L.ChainIndexTxOut, ChainIndexTx)] -> Either ChannelTxErr OnChainState
-getStart cid refMap = do
+getStart :: ChannelID -> NetworkId -> [(TxOutRef, DecoratedTxOut, ChainIndexTx)] -> Either ChannelTxErr OnChainState
+getStart cid networkId refMap = do
   let ctmap = rights $ map resolveChannelToken refMap
   case find isStartState ctmap of
     Just (_, _, _, _, tyTxOutRef) -> return . OnChainState $ tyTxOutRef
@@ -412,26 +414,28 @@ getStart cid refMap = do
       d <- parseDatumFromOutputDatum citx rawDatum
       cd <- channelDatumFromDatum d
       -- Create the typed TxOutRef version for the given txOutRef.
-      tyTxOutRef <- case Typed.typeScriptTxOutRef tcv txOutRef (toTxOut lCiTxOut) d of
+      tyTxOutRef <- case Scripts.typeScriptTxOutRef tcv txOutRef (toTxInfoTxOut lCiTxOut) d of
         Left _ -> throwError InvalidTxOutRefErr
         Right tyTxOutRef -> return tyTxOutRef
       return (ciTxOut, citx, d, cd, tyTxOutRef)
     isStartState (ciTxOut, _, _, cd, _) =
       let val = citoValue ciTxOut
-       in hasValidThreadToken cid (channelToken cd) val && isValidDatum cid cd
+       in hasValidThreadToken cid (channelToken cd) (fromCardanoValue val) && isValidDatum cid cd
 
-getStates :: ChannelID -> Scripts.TypedValidator ChannelTypes -> [(TxOutRef, L.ChainIndexTxOut)] -> [OnChainState]
-getStates cid tcv refMap =
+getStates :: ChannelID -> NetworkId -> Scripts.TypedValidator ChannelTypes -> [(TxOutRef, DecoratedTxOut)] -> [OnChainState]
+getStates cid networkId tcv refMap =
   flip mapMaybe refMap $ \(txOutRef, lciTxOut) -> do
-    let txOut = toTxOut lciTxOut
-    datum <- lciTxOut ^? ciTxOutScriptDatum . _2 . _Just
+    datum <-
+      lciTxOut ^? decoratedTxOutScriptDatum . _2 >>= \case
+        DatumInBody d -> Just d
+        _else -> Nothing
     ocsTxOutRef <- either (const Nothing) Just $ do
-      let val = lciTxOut ^. ciTxOutValue
-      tyTxOutRef <- case Typed.typeScriptTxOutRef tcv txOutRef txOut datum of
+      let val = lciTxOut ^. decoratedTxOutValue
+      tyTxOutRef <- case Scripts.typeScriptTxOutRef tcv txOutRef (toTxInfoTxOut lciTxOut) datum of
         Left _ -> throwError InvalidTxOutRefErr
         Right tyTxOutRef -> return tyTxOutRef
-      let ct = channelToken . Typed.tyTxOutData . Typed.tyTxOutRefOut $ tyTxOutRef
-      unless (hasValidThreadToken cid ct val) $ throwError InvalidThreadTokenErr
+      let ct = channelToken . Scripts.tyTxOutData . Scripts.tyTxOutRefOut $ tyTxOutRef
+      unless (hasValidThreadToken cid ct (fromCardanoValue val)) $ throwError InvalidThreadTokenErr
       pure tyTxOutRef
     pure $ OnChainState ocsTxOutRef
 
