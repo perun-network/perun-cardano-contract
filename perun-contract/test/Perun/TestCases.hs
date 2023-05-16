@@ -1,19 +1,21 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Perun.TestCases (perunTests) where
 
 import Control.Lens hiding (both)
 import Data.Tuple.Extra
 import Perun hiding (ChannelAction (..))
-import Perun.Offchain (mkNonceFromInteger)
 import Perun.PerunSpec
 import Perun.Test.EvilContract
 import Plutus.Contract.Test
 import Plutus.Contract.Test.ContractModel
-import PlutusTx.Builtins (BuiltinByteString (..))
+import PlutusTx.Builtins (BuiltinByteString)
 import Test.QuickCheck
+import Test.QuickCheck.DynamicLogic (arbitraryQ)
 import Test.Tasty (TestTree)
 import Test.Tasty.QuickCheck
 
@@ -268,10 +270,12 @@ getChannel wallets nonce =
    in Channel defaultTimeLock wSigningKeys wPaymentKeys nonce
 
 requireGetChannel :: String -> DL PerunModel PerunModelState
-requireGetChannel msg =
-  getContractState >>= \case
-    Nothing -> fail $ "PerunModel must contain active channel: " <> msg
-    (Just pms) -> return pms
+requireGetChannel msg = do
+  viewContractState pmstate >>= \case
+    Nothing -> do
+      fail $ "PerunModel must contain active channel: " <> msg
+    (Just pms) -> do
+      return pms
 
 requireWithChannel :: String -> (PerunModelState -> DL PerunModel a) -> DL PerunModel a
 requireWithChannel msg f = requireGetChannel msg >>= f
