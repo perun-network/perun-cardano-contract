@@ -61,9 +61,6 @@ instance Pretty StarterContracts where
 
 instance Builtin.HasDefinitions StarterContracts where
   getDefinitions = [PerunContract]
-  getSchema = \case
-    PerunContract -> Builtin.endpointsToSchemas @Perun.ChannelSchema
-    AdjudicatorContract _ -> Builtin.endpointsToSchemas @Perun.AdjudicatorSchema
   getContract = \case
     PerunContract -> SomeBuiltin Perun.contract
     AdjudicatorContract cID -> SomeBuiltin (Perun.adjudicatorSubscription cID)
